@@ -1,0 +1,339 @@
+---
+title: "vaccine DCE"
+author: "Finley_Yu"
+date: "2021/7/26"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+set.seed(123)
+# import the original data ----
+library(readxl)
+library(apollo)
+#> Apollo 0.2.4
+#> www.ApolloChoiceModelling.com
+#> See url for a detailed manual, examples and a help forum.
+#> Sign up to our mailing list for updates on new releases.
+library(haven) # used to read sav file
+library(mlogit) # to test IIA assumptions 
+library(dplyr)
+library(tidyverse) # used for pipeline operation
+
+setwd("C:/Users/Finley/Desktop/research/healthcare/P1 COVID19/task 1 discrete choice")
+
+Wholedata <- read_sav("Data/20210709 data 新冠肺炎疫苗接种意愿调查问卷（中文版）.sav")
+choice_dat <- read_xlsx("Formal study/survey_design.xlsx")
+weight <- read_xlsx("Vaccine-DCE/weight.xlsx", sheet = 1)
+```
+
+
+```{r introduce weights and rank the participants record by their groups}
+weight$strata <- as.character(as.hexmode(weight$gender+weight$residence*16+weight$province_id*16^2)) #"Urban-Gender"
+Wholedata$strata <- as.character(as.hexmode(Wholedata$B4+Wholedata$B7*16+Wholedata$B5*16^2)) #"Province-Urban-Gender"
+
+dat <- left_join(Wholedata, weight, by="strata")
+dat <- dat[order(dat$QQ),]
+```
+
+
+```{r disrete choice dataset formation}
+answer_dat <- dat %>%
+  dplyr::select(QA1, QA2, QA3, QA4, QA5, QA6, QA7, QA8, QA9, QA10, QA11, QA12,
+                QB1, QB2, QB3, QB4, QB5, QB6, QB7, QB8, QB9, QB10, QB11, QB12,
+                QC1, QC2, QC3, QC4, QC5, QC6, QC7, QC8, QC9, QC10, QC11, QC12) 
+
+choice_vec <- as.vector(t(answer_dat))
+choice_vec <- choice_vec[!is.na(choice_vec)]
+
+choice_full_dat <- bind_rows(
+  replicate(4000, choice_dat[1:12,], simplify = FALSE),
+  replicate(4000, choice_dat[13:24,], simplify = FALSE),
+  replicate(4000, choice_dat[25:36,], simplify = FALSE)
+) 
+
+choice_full_dat$ID = ceiling(c(1:nrow(choice_full_dat))/12)
+choice_full_dat$choice <- as.numeric(choice_vec)
+choice_full_dat$weight <- rep(dat$weight, each = 12)
+
+# outright refusal rate: 0.0110 without weight; 0.0108 with weight
+outright_refusal <- matrix(choice_vec, ncol = 12, byrow = TRUE) %>%
+  apply(., 1, function(v) all(v == 3))
+
+outright_refusal_rate <- sum(outright_refusal * dat$weight) / sum(dat$weight)
+# save data
+# write.table(choice_full_dat,file = "choice data.csv", sep = ",", row.names = FALSE)
+```
+
+# choice data analysis
+
+```{r}
+
+choice_full_dat$choice_id = c(1:nrow(choice_full_dat))
+# convert function
+convert <- function(f){
+  if(length(levels(f))==3){
+    return(list(a=ifelse(f==1,1,0),b=ifelse(f==2,1,0)))
+  }
+  else
+    print("This function is not applicable.")
+}
+
+
+model <- choice_full_dat
+
+model$v1_price <- factor(model$v1_price, labels = c(0,200,400,600))
+model$v2_price <- factor(model$v2_price, labels = c(0,200,400,600))
+model$price.1 <- as.numeric(as.character(model$v1_price))
+model$price.2 <- as.numeric(as.character(model$v2_price))
+
+# factorize the categorical attributes: refer to the codebook
+model$v1_risk <- factor(model$v1_risk, labels = c(0,2,1))
+model$risk2.1 <- convert(model$v1_risk)$a
+model$risk3.1 <- convert(model$v1_risk)$b
+model$v2_risk <- factor(model$v2_risk, labels = c(0,2,1))
+model$risk2.2 <- convert(model$v2_risk)$a
+model$risk3.2 <- convert(model$v2_risk)$b
+
+model$v1_duration <- factor(model$v1_duration, labels = c(1,0,2))
+model$duration2.1 <- convert(model$v1_duration)$a
+model$duration3.1 <- convert(model$v1_duration)$b
+model$v2_duration <- factor(model$v2_duration, labels = c(1,0,2))
+model$duration2.2 <- convert(model$v2_duration)$a
+model$duration3.2 <- convert(model$v2_duration)$b
+
+model$v1_efficacy <- factor(model$v1_efficacy, labels = c(0,1,2))
+model$efficacy2.1 <- convert(model$v1_efficacy)$a
+model$efficacy3.1 <- convert(model$v1_efficacy)$b
+model$v2_efficacy <- factor(model$v2_efficacy, labels = c(0,1,2))
+model$efficacy2.2 <- convert(model$v2_efficacy)$a
+model$efficacy3.2 <- convert(model$v2_efficacy)$b
+
+model$admin.1 <- factor(model$v1_admin, labels = c(0,1))# 0: injected; 1: oral
+model$admin.1 <- as.numeric(as.character(model$admin.1))
+model$admin.2 <- factor(model$v2_admin, labels = c(0,1))
+model$admin.2 <- as.numeric(as.character(model$admin.2))
+
+model$v1_doses <- factor(model$v1_doses, labels = c(0,1,2))
+model$doses2.1 <- convert(model$v1_doses)$a
+model$doses3.1 <- convert(model$v1_doses)$b
+model$v2_doses <- factor(model$v2_doses, labels = c(0,1,2))
+model$doses2.2 <- convert(model$v2_doses)$a
+model$doses3.2 <- convert(model$v2_doses)$b
+
+model$origin.1 <- factor(model$v1_origin, labels = c(0,1))# 0: domestic; 1: imported
+model$origin.1 <- as.numeric(as.character(model$origin.1))
+model$origin.2 <- factor(model$v2_origin, labels = c(0,1))
+model$origin.2 <- as.numeric(as.character(model$origin.2))
+```
+
+## Test IIA assumptions (using Hausman and Mcfadden test)
+
+```{r test IIA assumption}
+vac1_dat <- model %>%
+  dplyr::select(choice_id, choice, v1_price, v1_risk, v1_duration, v1_efficacy, v1_admin, v1_doses, v1_origin, weight) %>%
+  dplyr::rename(
+    price = v1_price,
+    risk = v1_risk,
+    duration = v1_duration,
+    efficacy = v1_efficacy,
+    admin = v1_admin,
+    doses = v1_doses,
+    origin = v1_origin
+  ) %>%
+  mutate(
+    mode = "alt1",
+    vaccine_asc = 1,
+    choice = ifelse(choice == 1, TRUE, FALSE)
+  )
+
+vac2_dat <- model %>%
+  dplyr::select(choice_id, choice, v2_price, v2_risk, v2_duration, v2_efficacy, v2_admin, v2_doses, v2_origin, weight) %>%
+  dplyr::rename(
+    price = v2_price,
+    risk = v2_risk,
+    duration = v2_duration,
+    efficacy = v2_efficacy,
+    admin = v2_admin,
+    doses = v2_doses,
+    origin = v2_origin
+  ) %>%
+  mutate(
+    mode = "alt2",
+    vaccine_asc = 1,
+    choice = ifelse(choice == 2, TRUE, FALSE)
+  )
+
+vac3_dat <- model %>%
+  dplyr::select(choice_id, choice, weight) %>%
+  mutate(
+    mode = "alt3",
+    choice = ifelse(choice == 3, TRUE, FALSE),
+    vaccine_asc = 0,
+    price = NA,
+    risk = NA,
+    duration = NA,
+    efficacy = NA,
+    admin = NA,
+    doses = NA,
+    origin = NA
+  )
+
+## from Greene's Econometric Analysis p. 731
+data("TravelMode",package="AER")
+TravelMode <- mlogit.data(TravelMode,choice="choice",shape="long",
+                          alt.var="mode",chid.var="individual")
+
+## Create a variable of income only for the air mode
+
+TravelMode$avinc <- with(TravelMode,(mode=='air')*income)
+
+## Estimate the model on all alternatives, with car as the base level
+## like in Greene's book.
+
+#x <- mlogit(choice~wait+gcost+avinc,TravelMode,reflevel="car")
+x <- mlogit(choice~wait+gcost+avinc,TravelMode)
+
+## Estimate the same model for ground modes only (the variable avinc
+## must be dropped because it is 0 for every observation
+
+g <- mlogit(choice~wait+gcost,TravelMode,reflevel="car",
+            alt.subset=c("car","bus","train"))
+
+## Compute the test
+
+hmftest(x,g)
+```
+
+```{r use apollo package to analyze}
+# use apollo package to analyze
+# ####################################################### #
+#### 1. Definition of core settings                        
+# ####################################################### #
+
+### Initialise code
+apollo_initialise()
+
+### Set core controls
+apollo_control <- list(
+  modelName = "MNL",
+  modelDescr = "Adults' preferences for a vaccine product",
+  indivID = "ID"
+)
+# ####################################################### #
+#### 2. Data loading                                   ####
+# ####################################################### #
+
+database <- subset(model, select = c("ID","price.1","risk2.1","risk3.1","duration2.1",
+                                     "duration3.1","efficacy2.1","efficacy3.1",
+                                     "admin.1","doses2.1","doses3.1","origin.1",
+                                     "price.2","risk2.2","risk3.2",
+                                     "duration2.2","duration3.2","efficacy2.2",
+                                     "efficacy3.2","admin.2","doses2.2",
+                                     "doses3.2","origin.2","choice"))
+
+database <- as.data.frame(database)
+
+# ####################################################### #
+#### 3. Parameter definition                           ####
+# ####################################################### #
+
+### Vector of parameters, including any that are kept fixed 
+### during estimation
+
+apollo_beta <- c(
+  asc     = 0,
+  b_price  = 0,
+  b_risk2  = 0,
+  b_risk3  = 0,
+  b_duration2  = 0,
+  b_duration3 = 0,
+  b_efficacy2 = 0,
+  b_efficacy3 = 0,
+  b_oral = 0,
+  b_dose2 = 0,
+  b_dose3 = 0,
+  b_imported = 0
+)
+
+### Vector with names (in quotes) of parameters to be
+###  kept fixed at their starting value in apollo_beta.
+### Use apollo_beta_fixed = c() for no fixed parameters.
+
+apollo_fixed <- c() # no fixed parameters in our model
+
+# ####################################################### #
+#### 4. Input validation                               ####
+# ####################################################### #
+
+apollo_inputs = apollo_validateInputs()
+
+# ####################################################### #
+#### 5. Likelihood definition                          ####
+# ####################################################### #
+
+apollo_probabilities <- function(apollo_beta, apollo_inputs, functionality = "estimate"){
+  ### Attach inputs and detach after function exit
+  apollo_attach(apollo_beta, apollo_inputs)
+  on.exit(apollo_detach(apollo_beta, apollo_inputs))
+  
+  ### Create list of probabilities P
+  P <- list()
+  
+  V <- list()
+  
+  ### List of utilities: these must use the same names as
+  ### in mnl_settings, order is irrelevant.
+  V[['alt1']] = asc + b_price*price.1 + b_risk2*risk2.1 + b_risk3*risk3.1 + 
+    b_duration2*duration2.1 + b_duration3*duration3.1 + b_efficacy2*efficacy2.1 + 
+    b_efficacy3*efficacy3.1 + b_oral*admin.1 + b_dose2*doses2.1 + 
+    b_dose3*doses3.1 + b_imported*origin.1
+  V[['alt2']] = asc + b_price*price.2 + b_risk2*risk2.2 + b_risk3*risk3.2 + 
+    b_duration2*duration2.2 + b_duration3*duration3.2 + b_efficacy2*efficacy2.2 + 
+    b_efficacy3*efficacy3.2 + b_oral*admin.2 + b_dose2*doses2.2 + 
+    b_dose3*doses3.2 + b_imported*origin.2
+  V[['alt3']] = 0
+  
+  ### Define settings for MNL model component
+  mnl_settings <- list(
+    alternatives = c(alt1 = 1, alt2 = 2, alt3 = 3),
+    avail        = list(alt1 = 1, alt2 = 1, alt3 = 1),
+    choiceVar    = choice,
+    V            = V
+  )
+  
+  ### Compute probabilities using MNL model
+  P[['model']] = apollo_mnl(mnl_settings, functionality)
+  
+  ### Take product across observation for same individual
+  P = apollo_panelProd(P, apollo_inputs, functionality)
+  
+  ### Using sampling weights in estimation and prediction
+  P = apollo_weighting(P, apollo_inputs)
+  
+  
+  ### Prepare and return outputs of function
+  P = apollo_prepareProb(P, apollo_inputs, functionality)
+  
+  return(P)
+}
+
+# ####################################################### #
+#### 6. Model estimation and reporting                 ####
+# ####################################################### #
+fit <- apollo_estimate(apollo_beta, apollo_fixed, 
+                       apollo_probabilities, apollo_inputs)
+
+apollo_modelOutput(fit, list(printPVal = TRUE))
+
+# ####################################################### #
+#### 7. Willingness to pay                 ####
+# ####################################################### #
+
+for (i in c("b_risk2", "b_risk3", "b_duration2", "b_duration3", 
+            "b_oral", "b_dose2", "b_dose3", "b_imported")) {
+  deltaMethod_settings <- list(operation = "ratio", parName1 = i, parName2 = "b_price",
+                               multPar1 = -1)
+  apollo_deltaMethod(fit, deltaMethod_settings)
+}
+
+```
