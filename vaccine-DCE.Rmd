@@ -25,36 +25,11 @@ library(apollo) # analysis method
 pacman::p_load("maps", "fastR2", "mapdata", "maptools", "ggplot2", "mapproj", 
                "rgdal", "reshape2", "Hmisc", "jtools", "pscl", "aod", "gpclib")
 
-
-# function: Format DCE model output
-FormatResult <- function(apollo_model, df=143998){
-  beta_dat <- as.data.frame(apollo_modelOutput(apollo_model, list(printPVal = TRUE)))[,c(1,5,7)] %>%
-    rename(p_value = `p(1-sided)`) %>%
-    mutate(
-      `2.5%` = Estimate + qnorm(0.025)*Rob.s.e.,
-      `97.5%` = Estimate + qnorm(0.975)*Rob.s.e.
-    ) %>%
-    dplyr::select(Estimate, `2.5%`, `97.5%`, p_value)
-  var_name <- names(coef(apollo_model))
-  beta_dat$WTP <- NA_real_
-  beta_dat$WTP_p_value <- NA_real_
-  for (i in c(1:length(var_name))) {
-    if (var_name[i]!="b_price"){
-      temp<-apollo_deltaMethod(apollo_model, deltaMethod_settings = list(operation = "ratio", 
-                                                                parName1 = var_name[i], 
-                                                                parName2 = "b_price", 
-                                                                multPar1 = -1))
-      beta_dat[var_name[i], "WTP"] = temp[1]
-      # one sided p value
-      beta_dat[var_name[i],"WTP_p_value"] = ifelse(temp[3]>0,2*(1-pt(temp[3],df)),2*pt(temp[3],df))
-    }
-  }
-  beta_dat <- beta_dat %>% mutate_at(vars(ends_with("p_value")), function(v) ifelse(v<1e-3,"<0.001",v))
-  return(beta_dat)
-}
 ```
 
-```{r load data}
+## 0. sample characteristic
+
+```{r}
 Wholedata <- read_sav("Data/20210709 data 新冠肺炎疫苗接种意愿调查问卷（中文版）.sav")
 choice_dat <- read_xlsx("Data/survey_design.xlsx")
 weight_dat <- read_xlsx("Data/weight.xlsx", sheet = 1)
@@ -106,15 +81,7 @@ dat <- dat %>%
     ),
     fpc = weight*1403850000 # population for each strata
   )
-```
 
-
-
-## 0. sample characteristic
-
-`gtsummary` package would make the code look more concise.
-
-```{r}
 # 1.0 basic info ----
 # gender proportion 1-male 2-female
 round(wpct(dat$gender_2l, dat$weight), 4)
@@ -162,7 +129,7 @@ dat %>% tabyl(insurance_2l)
 round(wpct(dat$B21, dat$weight), 4)
 round(wpct(dat$B21), 4)
 
-# 1.2 other diagnose "B22_1","B22_2","B22_3","B22_4","B22_5" ----
+# 1.2 other diagnose ----
 
 round(wpct(dat$B22_1, dat$weight), 4) # family
 round(wpct(dat$B22_1), 4)
@@ -231,14 +198,12 @@ dat %>% tabyl(hasvaccined_2l)
 
 # perceived risk
 
-# 1.5 trust -----
+# 1.6 trust -----
 # how much do you trust officials?
 
 # how much do you trust academic institutions?
 
 # how much do you trust pharmaceutical companies?
-
-
 
 # select the attributes to be included in interaction terms
 socio_dat <- dat %>%
@@ -260,7 +225,11 @@ socio_dat <- dat %>%
   ) %>%
   select(ID, gender_2l, age_high, age_mid, education_high, education_mid, marriage_2l, residence_2l, occupation_high, occupation_mid, insurance_2l, income_high, income_mid, chronic_2l, hasvaccined_2l, depression_2l, province_31l, weight, fpc, strata)
 
-# 1.6 `gtsummary` version: sampling characteristics
+write.csv(socio_dat, "Data/socio_dat.csv")
+
+# (Optional) `gtsummary` version: sampling characteristics
+
+# with weights
 svydat <- dat %>%
   mutate(
     marriage_2l = as.factor(marriage_2l),
@@ -284,14 +253,37 @@ mysvy <- svydesign(
 
 mysvy %>%
   tbl_svysummary(
-    statistic = list(all_categorical() ~ "{p}"),
-    digits = all_categorical() ~ 1,
+    statistic = list(all_categorical() ~ "{p}%"),
+    digits = all_categorical() ~ 1
+    # change the label
     # label = list(
     #   gender_2l ~ "Gender"
     # )
   )
 
-write.csv(socio_dat, "Data/socio_dat.csv")
+# without weights
+
+dat %>%
+  mutate(
+    marriage_2l = as.factor(marriage_2l),
+    ethicity_6l = as.factor(B6),
+    province_31l = as.factor(province_31l),
+    occupation_3l = as.factor(occupation_3l),
+    insurance_2l = as.factor(insurance_2l),
+    chronic_2l = as.factor(chronic_2l),
+    hasvaccined_2l = as.factor(hasvaccined_2l)
+  ) %>%
+  select(gender_2l, agegp_3l, education_3l, marriage_2l, ethicity_6l, 
+         province_31l, residence_2l, occupation_3l, insurance_2l, 
+         income_3l, chronic_2l, hasvaccined_2l, depression_2l) %>%
+  tbl_summary(
+    statistic = list(all_categorical() ~ "{n} ({p}%)"),
+    digits = all_categorical() ~ 1
+    # change the label
+    # label = list(
+    #   gender_2l ~ "Gender"
+    # ) 
+  )
 ```
 
 ```{r Perparation: generate choice data}
@@ -385,7 +377,6 @@ write.csv(model, file = "Data/database.csv")
 
 ## 1. Test IIA assumptions (using Hausman and Mcfadden test)
 
-
 ```{r test IIA assumption}
 vac1_dat <- model %>%
   dplyr::select(choice_id, choice, v1_price, v1_risk, v1_duration, v1_efficacy, v1_admin, v1_doses, v1_origin, weight) %>%
@@ -440,15 +431,10 @@ full_dat <- model %>%
   bind_rows(vac1_dat, vac2_dat)
 
 ## from Greene's Econometric Analysis p. 731
-# data("TravelMode",package="AER")
 VaccineMode <- mlogit.data(full_dat,
   choice = "choice", shape = "long",
   alt.var = "mode", chid.var = "choice_id"
 )
-
-## Create a variable of income only for the air mode
-
-# TravelMode$avinc <- with(TravelMode, (mode=='air')*income)
 
 ## Estimate the model on all alternatives, with car as the base level
 ## like in Greene's book.
@@ -466,9 +452,9 @@ g <- mlogit(choice ~ 0 + price + risk + duration + efficacy + admin + doses + or
 hmftest(x, g)
 ```
 
-## 2. Mixed model (Expired: out of memory) 
+## 2. Mixed logit model
 
-### 2.1 Perference space
+### 2.1 Preference space
 
 ```{r Mixed logit model}
 # use apollo package to analyze
@@ -879,7 +865,9 @@ apollo_control <- list(
 #### 2. Data loading                                   ####
 # ####################################################### #
 database <- read.csv(file = "Data/database.csv")
+
 database <- database[1:1440, ]
+
 socio_dat <- read.csv(file = "Data/socio_dat.csv")
 database <- database %>%
   select(ID, price.1, risk2.1, risk3.1, duration2.1, duration3.1, efficacy2.1, efficacy3.1, admin.1, doses2.1, doses3.1, origin.1, price.2, risk2.2, risk3.2, duration2.2, duration3.2, efficacy2.2, efficacy3.2, admin.2, doses2.2, doses3.2, origin.2, choice) %>%
@@ -1582,9 +1570,11 @@ save(fit, file = paste0(getwd(), "/Model/ML_interaction_preference_space.RData")
 
 ### 2.4 Analyze the results
 
+#### 2.4.1 Report the basic model results
+
 ```{r}
 # choose either one: ML_preference_space.RData / ML_corr_WTP_sapce.RData
-load(file = "Model/ML_interaction_preference.RData")
+load(file = "Model/ML_preference_space.RData")
 # ####################################################### #
 #### 7. Report result                ####
 # ####################################################### #
@@ -1616,48 +1606,563 @@ FormatResult_ML <- function(apollo_model, df=143998){
 
 result_dat <- FormatResult_ML(fit)
 
-# write.csv(result_dat,file = "Result/ML_preferenced.csv")
+result_dat_star <- result_dat %>%
+  filter(p_value == "<0.001" | as.numeric(p_value)<0.05)
+
+write.csv(result_dat,file = "Result/ML_preferenced.csv")
 ```
+
+
+#### 2.4.2 Report the extended ML model result
+
+```{r result of extended model}
+#### Effect of main term and individual characteristics
+load(file = "Model/ML_interaction_preference.RData")
+result_dat = FormatResult_ML(fit)
+
+export(result_dat[c(1:12, 193:203), ], "Result/ML_extended.csv", row.names = TRUE)
+
+#### Beta and OR matrix
+beta_dat <- result_dat %>%
+  mutate(
+  Estimate = ifelse(str_detect(rownames(result_dat), "price"), Estimate*100, Estimate), # multiply the beta of 100 RMB.
+  beta = paste0(as.character(sprintf("%.3f", Estimate)), 
+                case_when(p_value == "<0.001" ~ "***",
+                          p_value >= 0.001 & p_value < 0.01 ~ "**",
+                          p_value >= 0.01 & p_value < 0.05 ~ "*",
+                          p_value >= 0.05 ~ "")),
+  OR = paste0(as.character(sprintf("%.4f", exp(Estimate))), 
+                case_when(p_value == "<0.001" ~ "***",
+                          p_value >= 0.001 & p_value < 0.01 ~ "**",
+                          p_value >= 0.01 & p_value < 0.05 ~ "*",
+                          p_value >= 0.05 ~ ""))
+)
+
+interaction_effect_pvalue_mat <- matrix(beta_dat$beta[43:192], nrow = 15, ncol = 10, byrow = TRUE, dimnames = list(rownames = c("Gender: Female", "Age: >60 years", "Age: 40-59 years", "Education: college and above", "Education: Middle and high school", "Marriage: married", "Residence: Urban", "No jobs", "Work in a public sector", "Insurance: UEBMI", "High income", "Middle income", "Chronic: has any chronic conditions", "COVID-19 vaccination history: has taken at least one dose", "Depression: depressed"), col_names = c("Price", "Risk: one in a million", "Risk: one in hundred thousand ", "Duration: 12 months", "Duration: life long", "Efficacy: 70%", "Efficacy: 90%", "Oral", "3 doses", "imported")))
+
+interaction_OR_p_value_mat <- matrix(beta_dat$OR[43:192], nrow = 15, ncol = 10, byrow = TRUE, dimnames = list(rownames = c("Gender: Female", "Age: 18-39 years", "Age: 40-59 years", "Education: primary school or less", "Education: Middle and high school", "Marriage: married", "Residence: Urban", "Work in a private sector", "Work in a public sector", "Insurance: UEBMI", "Income: < 60000 RMB", "Income: 60000 - 149999 RMB", "Chronic: has any chronic conditions", "COVID-19 vaccination history: has taken at least one dose", "Depression: depressed"), col_names = c("price", "risk: one in a million", "risk: one in hundred thousand ", "duration: 12 months", "duration: life long", "efficacy: 70%", "efficacy: 90%", "oral", "3 doses", "imported")))
+
+export(interaction_effect_pvalue_mat,"Result/ML_extended_beta_matrix.csv", row.names = TRUE)
+
+# export(interaction_OR_p_value_mat,"Result/ML_extended_OR_matrix.csv", row.names = TRUE)
+
+#### province effect
+
+# load(file = "Model/NL_interaction.RData")
+# result_dat <- FormatResult(fit)
+WTP_Chongqing31 <- deltaMethod(fit, "(b_Hebei1+b_Shanxi2+b_Liaoning3+b_Jilin4+b_Heilongjiang5+b_Jiangsu6+b_Zhejiang7+b_Anhui8+b_Fujian9+b_Jiangxi10+b_Shandong11+b_Henan12+b_Hubei13+b_Hunan14+b_Guangdong15+b_Hainan16+b_Sichuan17+b_Guizhou18+b_Yunnan19+b_Shaanxi20+b_Gansu21+b_Qinghai22+b_Neimongol23+b_Guangxi24+b_Tibet25+b_Ningxia26+b_Xinjiang27+b_Beijing28+b_Shanghai29+b_Tianjin30)/b_price_mu", func = "WTP_Chongqing31", vcov. = fit$robvarcov)
+
+b_Chongqing31 <- deltaMethod(fit, "-(b_Hebei1+b_Shanxi2+b_Liaoning3+b_Jilin4+b_Heilongjiang5+b_Jiangsu6+b_Zhejiang7+b_Anhui8+b_Fujian9+b_Jiangxi10+b_Shandong11+b_Henan12+b_Hubei13+b_Hunan14+b_Guangdong15+b_Hainan16+b_Sichuan17+b_Guizhou18+b_Yunnan19+b_Shaanxi20+b_Gansu21+b_Qinghai22+b_Neimongol23+b_Guangxi24+b_Tibet25+b_Ningxia26+b_Xinjiang27+b_Beijing28+b_Shanghai29+b_Tianjin30)", func = "b_Chongqing31", vcov. = fit$robvarcov)
+
+b_Chongqing31 <- b_Chongqing31 %>%
+  select(Estimate, `2.5 %`, `97.5 %`) %>%
+  rename(
+    `2.5%` = `2.5 %`,
+    `97.5%` = `97.5 %`
+  ) %>%
+  mutate(
+    WTP = WTP_Chongqing31$Estimate,
+    p_value = ifelse(
+      as.numeric(b_Chongqing31[1]/b_Chongqing31[2])>0,
+      2*(1-pt(as.numeric(b_Chongqing31[1]/b_Chongqing31[2]),df = 143998)),
+      2*pt(as.numeric(b_Chongqing31[1]/b_Chongqing31[2]),df = 143998)
+    ),
+    WTP_p_value = ifelse(
+      as.numeric(WTP_Chongqing31[1]/WTP_Chongqing31[2])>0,
+      2*(1-pt(as.numeric(WTP_Chongqing31[1]/WTP_Chongqing31[2]),df = 143998)),
+      2*pt(as.numeric(WTP_Chongqing31[1]/WTP_Chongqing31[2]),df = 143998)
+    )
+  )
+
+province_dat <- rbind(result_dat[13:42, ], b_Chongqing31)
+
+write.csv(province_dat,file = "Result/ML_extended_province.csv")
+```
+
+```{r draw the province map}
+map_data <- import("Data/Mapdata/Chinamap_data.xlsx")
+map_data <- province_dat %>%
+  dplyr::select(WTP) %>%
+  mutate(
+    WTP = WTP+result_dat$WTP[1],
+    province = sapply(str_split(rownames(province_dat), pattern = "_|\\d"), "[", 2)
+  ) %>%
+  right_join(map_data, by = "province")
+
+# # Approach 1: using the shp data -----
+# 
+# mydat = rgdal::readOGR("Data/Mapdata/中华人民共和国.shp")
+# 
+# # convert the `SpatialPolygonsDataFrame` type into `data.frame`# if error occurs, type `gpclibPermit()`
+# gpclibPermit()
+# mysh <- fortify(mydat)
+# 
+# # convert the method of encoding
+# mysh = transform(mysh, name = iconv(name, from = "UTF8"))
+# 
+# names(mysh)[2:3] = c("x","y")
+# unique(mysh$name)
+# data_merge <- left_join(mysh,map_data)
+# 
+# pidat1 <-subset(data_merge,select = c("name","id","province_abbr","WTP"))%>%
+#          unique() 
+# 
+# # determine the fonts
+# windowsFonts(myFont = windowsFont("Times New Roman"))
+# 
+# map = ggplot(pidat1) +
+#   geom_map(aes(map_id = id, fill = WTP), color = "grey", map = mysh) +
+#   # geom_text_repel(data=cnames,aes(long_mean,lat_mean,label=province_abbr),size=3,fontface="bold")+
+#   scale_fill_distiller(name = "WTP (RMB)", palette = "RdYlGn", direction = 1) +
+#   expand_limits(mysh) + 
+#   coord_map() + #使用mapproj包将地球的一部分（近似球形）投影到2D平面
+#   labs(x = "", y = "", title = "",subtitle = "")+
+#   theme(
+#     legend.title = element_text(family = "myFont", face = "bold"),
+#     panel.grid.major =  element_blank(), 
+#     panel.grid.minor = element_blank(),
+#     panel.background = element_blank(),
+#     axis.line = element_blank(),
+#     axis.text = element_blank(),
+#     axis.ticks = element_blank()) +
+#   labs(fill = "WTP (RMB)")
+# 
+# print(map)
+# ggsave(filename = "Figure/Map.png", map, width = 10, height = 10, dpi = 300, units = "in", device='png')
+
+# Approach 2: use the json data -----
+
+library(tidyverse)
+library(readxl)
+library(sf)
+library(ggplot2)
+
+# 获取全国省级地图，则加后缀quanguo.json
+# 获取全国县级地图，则加后缀xian_quanguo.json
+# 获取部分地区，如某个市的县级地图，则加该行政区域代码，再加.json
+# 如果要获取市级地图，需要按遍历行政区域代码获取所有市的地图，然后合并县级区域
+# 全国主要山脉，南海九段线数据，则加后缀quanguo_Line.geojson
+
+#API_pre = "http://xzqh.mca.gov.cn/data/"
+
+China <- st_read(dsn = "Data/Mapdata/china.json",stringsAsFactors = FALSE)
+
+# check whether the data contains the projecting information
+# st_crs(China) # NA means no such information; need to attach manually
+# China <- st_set_crs(China, 4326)
+China <- st_transform(China, "+init=epsg:4508")
+
+
+data_merge <- China %>%
+  left_join(map_data, by = "adcode")
+
+# determine the fonts
+windowsFonts(myFont = windowsFont("Times New Roman"))
+
+map<-ggplot() + # 底图
+  geom_sf(data = data_merge, aes(fill = WTP)) + # 省域
+  coord_sf() +  # 投影方式
+  scale_fill_distiller(name = "WTP (RMB)", palette = "RdYlGn", direction = 1) +
+  theme(
+    legend.title = element_text(family = "myFont", face = "bold", size = 12),
+    panel.grid.major =  element_blank(), 
+    panel.grid.minor = element_blank(),
+    panel.background = element_blank(),
+    axis.line = element_blank(),
+    axis.text = element_blank(),
+    axis.ticks = element_blank())
+
+print(map)
+ggsave(filename = "Figure/Map2.png", map, width = 10, height = 10, dpi = 300, units = "in", device='png')
+```
+
+
+### 2.5 Relative importance of the attributes
+
+#### 2.5.1 Exclude price
+
+```{r Mixed logit model}
+# use apollo package to analyze
+# ####################################################### #
+#### 1. Definition of core settings
+# ####################################################### #
+### Clear memory
+rm(list = ls())
+
+### Load library
+library(apollo)
+
+### Initialise code
+apollo_initialise()
+
+### Set core controls
+apollo_control <- list(
+  modelName = "Mixed logit model",
+  modelDescr = "Mixed logit model to determine Adults' preferences for a vaccine product without price",
+  indivID = "ID",
+  mixing = TRUE, # mixed logit model for random coefficients, FALSE for MNL model
+  nCores = 6
+  #,weights = "weight"
+)
+# ####################################################### #
+#### 2. Data loading                                   ####
+# ####################################################### #
+database <- read.csv(file = "Data/database.csv")
+
+database <- database[1:1440, ] # use a 1% of sample
+
+database <- subset(database, select = c("ID","price.1","risk2.1","risk3.1","duration2.1",
+                                     "duration3.1","efficacy2.1","efficacy3.1",
+                                     "admin.1","doses2.1","doses3.1","origin.1",
+                                     "price.2","risk2.2","risk3.2",
+                                     "duration2.2","duration3.2","efficacy2.2",
+                                     "efficacy3.2","admin.2","doses2.2",
+                                     "doses3.2","origin.2","choice","weight"))
+
+database <- as.data.frame(database)
+
+# ####################################################### #
+#### 3. Parameter definition                           ####
+# ####################################################### #
+
+### Vector of parameters, including any that are kept fixed
+### during estimation
+
+apollo_beta <- c(
+  asc = 0,
+  # b_price_mu = 0,
+  b_risk2_mu = 0,
+  b_risk3_mu = 0,
+  b_duration2_mu = 0,
+  b_duration3_mu = 0,
+  b_efficacy2_mu = 0,
+  b_efficacy3_mu = 0,
+  b_oral_mu = 0,
+  b_dose2_mu = 0,
+  b_dose3_mu = 0,
+  b_imported_mu = 0,
+  # b_price_sigma = 0,
+  b_risk2_sigma = 0,
+  b_risk3_sigma = 0,
+  b_duration2_sigma = 0,
+  b_duration3_sigma = 0,
+  b_efficacy2_sigma = 0,
+  b_efficacy3_sigma = 0,
+  b_oral_sigma = 0,
+  b_dose2_sigma = 0,
+  b_dose3_sigma = 0,
+  b_imported_sigma = 0
+)
+
+### Vector with names (in quotes) of parameters to be kept fixed at their starting value in apollo_beta, use apollo_beta_fixed = c() if none
+apollo_fixed <- c()
+
+# ################################################################# #
+#### 4. Define Random Components                                    ####
+# ################################################################# #
+
+### Set parameters for generating draws
+apollo_draws <- list(
+  interDrawsType = "mlhs",
+  interNDraws = 500,
+  interUnifDraws = c(),
+  interNormDraws = paste0("draws_", c(
+    "risk2",
+    "risk3", "duration2",
+    "duration3", "efficacy2",
+    "efficacy3", "oral",
+    "dose2", "dose3",
+    "imported"
+  )),
+  intraDrawsType = "",
+  intraNDraws = 0,
+  intraUnifDraws = c(),
+  intraNormDraws = c()
+)
+
+### Create random parameters
+apollo_randCoeff <- function(apollo_beta, apollo_inputs) {
+  randcoeff <- list()
+  # randcoeff[["b_price"]] <- b_price_mu + b_price_sigma * draws_price
+  randcoeff[["b_risk2"]] <- b_risk2_mu + b_risk2_sigma * draws_risk2
+  randcoeff[["b_risk3"]] <- b_risk3_mu + b_risk3_sigma * draws_risk3
+  randcoeff[["b_duration2"]] <- b_duration2_mu + b_duration2_sigma * draws_duration2
+  randcoeff[["b_duration3"]] <- b_duration3_mu + b_duration3_sigma * draws_duration3
+  randcoeff[["b_efficacy2"]] <- b_efficacy2_mu + b_efficacy2_sigma * draws_efficacy2
+  randcoeff[["b_efficacy3"]] <- b_efficacy3_mu + b_efficacy3_sigma * draws_efficacy3
+  randcoeff[["b_oral"]] <- b_oral_mu + b_oral_sigma * draws_oral
+  randcoeff[["b_dose2"]] <- b_dose2_mu + b_dose2_sigma * draws_dose2
+  randcoeff[["b_dose3"]] <- b_dose3_mu + b_dose3_sigma * draws_dose3
+  randcoeff[["b_imported"]] <- b_imported_mu + b_imported_sigma * draws_imported
+
+  return(randcoeff)
+}
+
+# ####################################################### #
+#### 5. Input validation                               ####
+# ####################################################### #
+
+apollo_inputs <- apollo_validateInputs()
+
+# ####################################################### #
+#### 6. Likelihood definition                          ####
+# ####################################################### #
+
+apollo_probabilities <- function(apollo_beta, apollo_inputs, functionality = "estimate") {
+  ### Attach inputs and detach after function exit
+  apollo_attach(apollo_beta, apollo_inputs)
+  on.exit(apollo_detach(apollo_beta, apollo_inputs))
+
+  ### Create list of probabilities P
+  P <- list()
+
+  V <- list()
+
+  ### List of utilities: these must use the same names as
+  ### in mnl_settings, order is irrelevant.
+  V[["alt1"]] <- asc + b_risk2 * risk2.1 + b_risk3 * risk3.1 +
+    b_duration2 * duration2.1 + b_duration3 * duration3.1 + b_efficacy2 * efficacy2.1 +
+    b_efficacy3 * efficacy3.1 + b_oral * admin.1 + b_dose2 * doses2.1 +
+    b_dose3 * doses3.1 + b_imported * origin.1
+  V[["alt2"]] <- asc + b_risk2 * risk2.2 + b_risk3 * risk3.2 +
+    b_duration2 * duration2.2 + b_duration3 * duration3.2 + b_efficacy2 * efficacy2.2 +
+    b_efficacy3 * efficacy3.2 + b_oral * admin.2 + b_dose2 * doses2.2 +
+    b_dose3 * doses3.2 + b_imported * origin.2
+  V[["alt3"]] <- 0
+
+  ### Define settings for MNL model component
+  mnl_settings <- list(
+    alternatives = c(alt1 = 1, alt2 = 2, alt3 = 3),
+    avail        = list(alt1 = 1, alt2 = 1, alt3 = 1),
+    choiceVar    = choice,
+    V            = V
+  )
+
+  ### Compute probabilities using MNL model
+  P[["model"]] <- apollo_mnl(mnl_settings, functionality)
+
+  ### Take product across observation for same individual
+  P = apollo_panelProd(P, apollo_inputs, functionality)
+
+  ### Average across inter-individual draws
+  P = apollo_avgInterDraws(P, apollo_inputs, functionality)
+
+  ### Prepare and return outputs of function
+  P = apollo_prepareProb(P, apollo_inputs, functionality)
+  
+  ### Using sampling weights in estimation and prediction
+  # P = apollo_weighting(P, apollo_inputs, functionality)
+
+  return(P)
+}
+
+# ####################################################### #
+#### 7. Model estimation                ####
+# ####################################################### #
+
+fit <- apollo_estimate(
+  apollo_beta, apollo_fixed,
+  apollo_probabilities, apollo_inputs
+)
+
+save(fit, file = paste0(getwd(), "/ML_Exclude_price.RData"))
+
+# apollo_modelOutput(fit, list(printPVal = TRUE)) # LL(final) = 
+```
+
+#### 2.5.2 Exclude risk
+
+```{r Mixed logit model}
+# use apollo package to analyze
+# ####################################################### #
+#### 1. Definition of core settings
+# ####################################################### #
+### Clear memory
+rm(list = ls())
+
+### Load library
+library(apollo)
+
+### Initialise code
+apollo_initialise()
+
+### Set core controls
+apollo_control <- list(
+  modelName = "Mixed logit model",
+  modelDescr = "Mixed logit model to determine Adults' preferences for a vaccine product",
+  indivID = "ID",
+  mixing = TRUE, # mixed logit model for random coefficients, FALSE for MNL model
+  nCores = 6
+  #,weights = "weight"
+)
+# ####################################################### #
+#### 2. Data loading                                   ####
+# ####################################################### #
+database <- read.csv(file = "Data/database.csv")
+
+# database <- database[1:1440, ] # use a 1% of sample
+
+database <- subset(database, select = c("ID","price.1","risk2.1","risk3.1","duration2.1",
+                                     "duration3.1","efficacy2.1","efficacy3.1",
+                                     "admin.1","doses2.1","doses3.1","origin.1",
+                                     "price.2","risk2.2","risk3.2",
+                                     "duration2.2","duration3.2","efficacy2.2",
+                                     "efficacy3.2","admin.2","doses2.2",
+                                     "doses3.2","origin.2","choice","weight"))
+
+database <- as.data.frame(database)
+
+# ####################################################### #
+#### 3. Parameter definition                           ####
+# ####################################################### #
+
+### Vector of parameters, including any that are kept fixed
+### during estimation
+
+apollo_beta <- c(
+  asc = 0,
+  b_price_mu = 0,
+  # b_risk2_mu = 0,
+  # b_risk3_mu = 0,
+  b_duration2_mu = 0,
+  b_duration3_mu = 0,
+  b_efficacy2_mu = 0,
+  b_efficacy3_mu = 0,
+  b_oral_mu = 0,
+  b_dose2_mu = 0,
+  b_dose3_mu = 0,
+  b_imported_mu = 0,
+  b_price_sigma = 0,
+  # b_risk2_sigma = 0,
+  # b_risk3_sigma = 0,
+  b_duration2_sigma = 0,
+  b_duration3_sigma = 0,
+  b_efficacy2_sigma = 0,
+  b_efficacy3_sigma = 0,
+  b_oral_sigma = 0,
+  b_dose2_sigma = 0,
+  b_dose3_sigma = 0,
+  b_imported_sigma = 0
+)
+
+### Vector with names (in quotes) of parameters to be kept fixed at their starting value in apollo_beta, use apollo_beta_fixed = c() if none
+apollo_fixed <- c()
+
+# ################################################################# #
+#### 4. Define Random Components                                    ####
+# ################################################################# #
+
+### Set parameters for generating draws
+apollo_draws <- list(
+  interDrawsType = "mlhs",
+  interNDraws = 500,
+  interUnifDraws = c(),
+  interNormDraws = paste0("draws_", c(
+    "price", "duration2",
+    "duration3", "efficacy2",
+    "efficacy3", "oral",
+    "dose2", "dose3",
+    "imported"
+  )),
+  intraDrawsType = "",
+  intraNDraws = 0,
+  intraUnifDraws = c(),
+  intraNormDraws = c()
+)
+
+### Create random parameters
+apollo_randCoeff <- function(apollo_beta, apollo_inputs) {
+  randcoeff <- list()
+
+  randcoeff[["b_price"]] <- b_price_mu + b_price_sigma * draws_price
+  randcoeff[["b_duration2"]] <- b_duration2_mu + b_duration2_sigma * draws_duration2
+  randcoeff[["b_duration3"]] <- b_duration3_mu + b_duration3_sigma * draws_duration3
+  randcoeff[["b_efficacy2"]] <- b_efficacy2_mu + b_efficacy2_sigma * draws_efficacy2
+  randcoeff[["b_efficacy3"]] <- b_efficacy3_mu + b_efficacy3_sigma * draws_efficacy3
+  randcoeff[["b_oral"]] <- b_oral_mu + b_oral_sigma * draws_oral
+  randcoeff[["b_dose2"]] <- b_dose2_mu + b_dose2_sigma * draws_dose2
+  randcoeff[["b_dose3"]] <- b_dose3_mu + b_dose3_sigma * draws_dose3
+  randcoeff[["b_imported"]] <- b_imported_mu + b_imported_sigma * draws_imported
+
+  return(randcoeff)
+}
+
+# ####################################################### #
+#### 5. Input validation                               ####
+# ####################################################### #
+
+apollo_inputs <- apollo_validateInputs()
+
+# ####################################################### #
+#### 6. Likelihood definition                          ####
+# ####################################################### #
+
+apollo_probabilities <- function(apollo_beta, apollo_inputs, functionality = "estimate") {
+  ### Attach inputs and detach after function exit
+  apollo_attach(apollo_beta, apollo_inputs)
+  on.exit(apollo_detach(apollo_beta, apollo_inputs))
+
+  ### Create list of probabilities P
+  P <- list()
+
+  V <- list()
+
+  ### List of utilities: these must use the same names as
+  ### in mnl_settings, order is irrelevant.
+  V[["alt1"]] <- asc + b_price * price.1 + b_duration2 * duration2.1 + 
+    b_duration3 * duration3.1 + b_efficacy2 * efficacy2.1 +
+    b_efficacy3 * efficacy3.1 + b_oral * admin.1 + b_dose2 * doses2.1 +
+    b_dose3 * doses3.1 + b_imported * origin.1
+  V[["alt2"]] <- asc + b_price * price.2 + b_duration2 * duration2.2 +
+    b_duration3 * duration3.2 + b_efficacy2 * efficacy2.2 +
+    b_efficacy3 * efficacy3.2 + b_oral * admin.2 + b_dose2 * doses2.2 +
+    b_dose3 * doses3.2 + b_imported * origin.2
+  V[["alt3"]] <- 0
+
+  ### Define settings for MNL model component
+  mnl_settings <- list(
+    alternatives = c(alt1 = 1, alt2 = 2, alt3 = 3),
+    avail        = list(alt1 = 1, alt2 = 1, alt3 = 1),
+    choiceVar    = choice,
+    V            = V
+  )
+
+  ### Compute probabilities using MNL model
+  P[["model"]] <- apollo_mnl(mnl_settings, functionality)
+
+  ### Take product across observation for same individual
+  P = apollo_panelProd(P, apollo_inputs, functionality)
+
+  ### Average across inter-individual draws
+  P = apollo_avgInterDraws(P, apollo_inputs, functionality)
+
+  ### Prepare and return outputs of function
+  P = apollo_prepareProb(P, apollo_inputs, functionality)
+  
+  ### Using sampling weights in estimation and prediction
+  # P = apollo_weighting(P, apollo_inputs, functionality)
+
+  return(P)
+}
+
+# ####################################################### #
+#### 7. Model estimation                ####
+# ####################################################### #
+
+fit <- apollo_estimate(
+  apollo_beta, apollo_fixed,
+  apollo_probabilities, apollo_inputs
+)
+
+
+save(fit, file = paste0(getwd(), "/ML_Exclude_risk.RData"))
+
+# apollo_modelOutput(fit, list(printPVal = TRUE)) # LL(final) = 
+```
+
+#### 2.5.3 Exclude duration
 
 ```{r}
-# ####################################################### #
-#### 8. Willingness to pay                 ####
-# ####################################################### #
-df <- nrow(database) - length(var_name) - 11
-WTP_dat <- data.frame(WTP = c(NA), WTP_p_value = c(NA))
-var_name <- c(
-  "asc", "b_price_mu", "b_risk2_mu", "b_risk3_mu", "b_duration2_mu", "b_duration3_mu", "b_efficacy2_mu",
-  "b_efficacy3_mu", "b_oral_mu", "b_dose2_mu", "b_dose3_mu", "b_imported_mu"
-)
-for (i in c(1:(length(var_name) + 11))) {
-  if (i <= length(var_name)) {
-    deltaMethod_settings <- list(
-      operation = "ratio", parName1 = var_name[i], parName2 = "b_price_mu",
-      multPar1 = -1
-    )
-    temp <- apollo_deltaMethod(fit, deltaMethod_settings)
-    WTP_dat[i, "WTP"] <- temp[1]
-    # one sided p value
-    WTP_dat[i, "WTP_p_value"] <- ifelse(temp[3] > 0, 1 - pt(temp[3], df), pt(temp[3], df))
-  } else {
-    WTP_dat[i, "WTP"] <- NA
-    WTP_dat[i, "WTP_p_value"] <- NA
-  }
-}
-
-# ####################################################### #
-#### 9. Result report                 ####
-# ####################################################### #
-result_dat <- cbind(signif(cbind(beta = coef(fit), confint(fit)), 3), coef(summary(fit))[, 4], WTP_dat) %>%
-  rename(p_value = `coef(summary(fit))[, 4]`) %>%
-  mutate_at(vars(ends_with("p_value")), function(v) ifelse(v < 1e-3, "<0.001", v))
-# note the sigma doesn't have a corresponding WTP
-write.csv(result_dat, file = "Result/Mixed_logit_result.csv")
-```
-
-## 3. Main effect model
-
-```{r nested logit model}
 # use apollo package to analyze
 # ####################################################### #
 #### 1. Definition of core settings                        
@@ -1673,148 +2178,20 @@ apollo_initialise()
 
 ### Set core controls
 apollo_control <- list(
-  modelName = "Nested logit",
-  modelDescr = "Two-level NL model to determine Adults' preferences for a vaccine product",
+  modelName = "Mixed logit model",
+  modelDescr = "Mixed logit model to determine Adults' preferences for a vaccine product",
   indivID = "ID",
-  weights = "weight" # apply sample weights
-)
-# ####################################################### #
-#### 2. Data loading                                   ####
-# ####################################################### #
-database <- read.csv(file = "Data/database.csv")
-database <- subset(database, select = c("ID","price.1","risk2.1","risk3.1","duration2.1",
-                                     "duration3.1","efficacy2.1","efficacy3.1",
-                                     "admin.1","doses2.1","doses3.1","origin.1",
-                                     "price.2","risk2.2","risk3.2",
-                                     "duration2.2","duration3.2","efficacy2.2",
-                                     "efficacy3.2","admin.2","doses2.2",
-                                     "doses3.2","origin.2","choice","weight"))
-
-database <- as.data.frame(database)
-
-# ####################################################### #
-#### 3. Parameter definition                           ####
-# ####################################################### #
-
-### Vector of parameters, including any that are kept fixed 
-### during estimation
-
-apollo_beta <- c(
-  asc     = 2.14,
-  b_price  = -0.00055,
-  b_risk2  = -0.354,
-  b_risk3  = -0.327,
-  b_duration2  = 0.144,
-  b_duration3 = 0.651,
-  b_efficacy2 = 0.292,
-  b_efficacy3 = 0.62,
-  b_oral = -0.0748,
-  b_dose2 = -0.046,
-  b_dose3 = -0.0556,
-  b_imported = -0.292,
-  lambda_PT = 0.614
-)
-
-### Vector with names (in quotes) of parameters to be
-###  kept fixed at their starting value in apollo_beta.
-### Use apollo_beta_fixed = c() for no fixed parameters.
-
-apollo_fixed <- c() # no fixed parameters in our model
-
-# ####################################################### #
-#### 4. Input validation                               ####
-# ####################################################### #
-
-apollo_inputs = apollo_validateInputs()
-
-# ####################################################### #
-#### 5. Likelihood definition                          ####
-# ####################################################### #
-
-apollo_probabilities <- function(apollo_beta, apollo_inputs, functionality = "estimate"){
-  ### Attach inputs and detach after function exit
-  apollo_attach(apollo_beta, apollo_inputs)
-  on.exit(apollo_detach(apollo_beta, apollo_inputs))
-  
-  ### Create list of probabilities P
-  P <- list()
-  
-  V <- list()
-  
-  ### List of utilities: these must use the same names as
-  ### in nl_settings, order is irrelevant.
-  V[['alt1']] = asc + b_price*price.1 + b_risk2*risk2.1 + b_risk3*risk3.1 + b_duration2*duration2.1 + b_duration3*duration3.1 + b_efficacy2*efficacy2.1 + b_efficacy3*efficacy3.1 + b_oral*admin.1 + b_dose2*doses2.1 + b_dose3*doses3.1 + b_imported*origin.1
-  V[['alt2']] = asc + b_price*price.2 + b_risk2*risk2.2 + b_risk3*risk3.2 + b_duration2*duration2.2 + b_duration3*duration3.2 + b_efficacy2*efficacy2.2 + b_efficacy3*efficacy3.2 + b_oral*admin.2 + b_dose2*doses2.2 + b_dose3*doses3.2 + b_imported*origin.2
-  V[['alt3']] = 0
-  
-  ### Specify nests for NL model
-  nlNests = list(root=1, PT=lambda_PT)
-  
-  ### Specify tree structure for NL model
-  nlStructure= list()
-  nlStructure[["root"]]   = c("alt3","PT")
-  nlStructure[["PT"]]     = c("alt1","alt2")
-  
-  ### Define settings for MNL model component
-  nl_settings <- list(
-    alternatives = c(alt1 = 1, alt2 = 2, alt3 = 3),
-    avail        = list(alt1 = 1, alt2 = 1, alt3 = 1),
-    choiceVar    = choice,
-    V            = V,
-    nlNests      = nlNests,
-    nlStructure  = nlStructure
-  )
-  
-  ### Compute probabilities using MNL model
-  P[['model']] = apollo_nl(nl_settings, functionality)
-  
-  ### Take product across observation for same individual
-  P = apollo_panelProd(P, apollo_inputs, functionality)
-  
-  ### Using sampling weights in estimation and prediction
-  P = apollo_weighting(P, apollo_inputs, functionality)
-  
-  ### Prepare and return outputs of function
-  P = apollo_prepareProb(P, apollo_inputs, functionality)
-  
-  return(P)
-}
-
-# ####################################################### #
-#### 6. Model estimation                   ####
-# ####################################################### #
-fit <- apollo_estimate(apollo_beta, apollo_fixed, 
-                       apollo_probabilities, apollo_inputs)
-
-save(fit, file = paste0(getwd(), "/Model/NL.RData"))
-```
-
-```{r nested logit model with weights}
-# use apollo package to analyze
-# ####################################################### #
-#### 1. Definition of core settings                        
-# ####################################################### #
-### clear
-#rm(list = ls())
-
-### Load library
-library(apollo)
-
-### Initialise code
-apollo_initialise()
-
-### Set core controls
-apollo_control <- list(
-  modelName = "Nested logit",
-  modelDescr = "Two-level NL model to determine Adults' preferences for a vaccine product",
-  indivID = "ID",
-  weights = "weight", # apply sample weights
+  mixing = TRUE, # mixed logit model for random coefficients, FALSE for MNL model
   nCores = 6
+  # weights = "weight" # apply sample weights
 )
 # ####################################################### #
 #### 2. Data loading                                   ####
 # ####################################################### #
 database <- read.csv(file = "Data/database.csv")
+
+database <- database[1:1440, ] # use a 1% of sample
+
 database <- subset(database, select = c("ID","price.1","risk2.1","risk3.1","duration2.1",
                                      "duration3.1","efficacy2.1","efficacy3.1",
                                      "admin.1","doses2.1","doses3.1","origin.1",
@@ -1829,111 +2206,150 @@ database <- as.data.frame(database)
 #### 3. Parameter definition                           ####
 # ####################################################### #
 
-### Vector of parameters, including any that are kept fixed 
+### Vector of parameters, including any that are kept fixed
 ### during estimation
 
 apollo_beta <- c(
-  asc     = 2.14,
-  b_price  = -0.00055,
-  b_risk2  = -0.354,
-  b_risk3  = -0.327,
-  b_duration2  = 0.144,
-  b_duration3 = 0.651,
-  b_efficacy2 = 0.292,
-  b_efficacy3 = 0.62,
-  b_oral = -0.0748,
-  b_dose2 = -0.046,
-  b_dose3 = -0.0556,
-  b_imported = -0.292,
-  lambda_PT = 0.614
+  asc = 0,
+  b_price_mu = 0,
+  b_risk2_mu = 0,
+  b_risk3_mu = 0,
+  # b_duration2_mu = 0,
+  # b_duration3_mu = 0,
+  b_efficacy2_mu = 0,
+  b_efficacy3_mu = 0,
+  b_oral_mu = 0,
+  b_dose2_mu = 0,
+  b_dose3_mu = 0,
+  b_imported_mu = 0,
+  b_price_sigma = 0,
+  b_risk2_sigma = 0,
+  b_risk3_sigma = 0,
+  # b_duration2_sigma = 0,
+  # b_duration3_sigma = 0,
+  b_efficacy2_sigma = 0,
+  b_efficacy3_sigma = 0,
+  b_oral_sigma = 0,
+  b_dose2_sigma = 0,
+  b_dose3_sigma = 0,
+  b_imported_sigma = 0
 )
 
-### Vector with names (in quotes) of parameters to be
-###  kept fixed at their starting value in apollo_beta.
-### Use apollo_beta_fixed = c() for no fixed parameters.
+### Vector with names (in quotes) of parameters to be kept fixed at their starting value in apollo_beta, use apollo_beta_fixed = c() if none
+apollo_fixed <- c()
 
-apollo_fixed <- c() # no fixed parameters in our model
+# ################################################################# #
+#### 4. Define Random Components                                    ####
+# ################################################################# #
+
+### Set parameters for generating draws
+apollo_draws <- list(
+  interDrawsType = "mlhs",
+  interNDraws = 500,
+  interUnifDraws = c(),
+  interNormDraws = paste0("draws_", c(
+    "price", "risk2", "risk3", 
+    "efficacy2", "efficacy3", "oral",
+    "dose2", "dose3",
+    "imported"
+  )),
+  intraDrawsType = "",
+  intraNDraws = 0,
+  intraUnifDraws = c(),
+  intraNormDraws = c()
+)
+
+### Create random parameters
+apollo_randCoeff <- function(apollo_beta, apollo_inputs) {
+  randcoeff <- list()
+
+  randcoeff[["b_price"]] <- b_price_mu + b_price_sigma * draws_price
+  randcoeff[["b_risk2"]] <- b_risk2_mu + b_risk2_sigma * draws_risk2
+  randcoeff[["b_risk3"]] <- b_risk3_mu + b_risk3_sigma * draws_risk3
+  # randcoeff[["b_duration2"]] <- b_duration2_mu + b_duration2_sigma * draws_duration2
+  # randcoeff[["b_duration3"]] <- b_duration3_mu + b_duration3_sigma * draws_duration3
+  randcoeff[["b_efficacy2"]] <- b_efficacy2_mu + b_efficacy2_sigma * draws_efficacy2
+  randcoeff[["b_efficacy3"]] <- b_efficacy3_mu + b_efficacy3_sigma * draws_efficacy3
+  randcoeff[["b_oral"]] <- b_oral_mu + b_oral_sigma * draws_oral
+  randcoeff[["b_dose2"]] <- b_dose2_mu + b_dose2_sigma * draws_dose2
+  randcoeff[["b_dose3"]] <- b_dose3_mu + b_dose3_sigma * draws_dose3
+  randcoeff[["b_imported"]] <- b_imported_mu + b_imported_sigma * draws_imported
+
+  return(randcoeff)
+}
 
 # ####################################################### #
-#### 4. Input validation                               ####
+#### 5. Input validation                               ####
 # ####################################################### #
 
-apollo_inputs = apollo_validateInputs()
+apollo_inputs <- apollo_validateInputs()
 
 # ####################################################### #
-#### 5. Likelihood definition                          ####
+#### 6. Likelihood definition                          ####
 # ####################################################### #
 
-apollo_probabilities <- function(apollo_beta, apollo_inputs, functionality = "estimate"){
+apollo_probabilities <- function(apollo_beta, apollo_inputs, functionality = "estimate") {
   ### Attach inputs and detach after function exit
   apollo_attach(apollo_beta, apollo_inputs)
   on.exit(apollo_detach(apollo_beta, apollo_inputs))
-  
+
   ### Create list of probabilities P
   P <- list()
-  
+
   V <- list()
-  
+
   ### List of utilities: these must use the same names as
-  ### in nl_settings, order is irrelevant.
-  V[['alt1']] = asc + b_price*price.1 + b_risk2*risk2.1 + b_risk3*risk3.1 + b_duration2*duration2.1 + b_duration3*duration3.1 + b_efficacy2*efficacy2.1 + b_efficacy3*efficacy3.1 + b_oral*admin.1 + b_dose2*doses2.1 + b_dose3*doses3.1 + b_imported*origin.1
-  V[['alt2']] = asc + b_price*price.2 + b_risk2*risk2.2 + b_risk3*risk3.2 + b_duration2*duration2.2 + b_duration3*duration3.2 + b_efficacy2*efficacy2.2 + b_efficacy3*efficacy3.2 + b_oral*admin.2 + b_dose2*doses2.2 + b_dose3*doses3.2 + b_imported*origin.2
-  V[['alt3']] = 0
-  
-  ### Specify nests for NL model
-  nlNests = list(root=1, PT=lambda_PT)
-  
-  ### Specify tree structure for NL model
-  nlStructure= list()
-  nlStructure[["root"]]   = c("alt3","PT")
-  nlStructure[["PT"]]     = c("alt1","alt2")
-  
+  ### in mnl_settings, order is irrelevant.
+  V[["alt1"]] <- asc + b_price * price.1 + b_risk2 * risk2.1 + 
+    b_risk3 * risk3.1 + b_efficacy2 * efficacy2.1 +
+    b_efficacy3 * efficacy3.1 + b_oral * admin.1 + b_dose2 * doses2.1 +
+    b_dose3 * doses3.1 + b_imported * origin.1
+  V[["alt2"]] <- asc + b_price * price.2 + b_risk2 * risk2.2 +
+    b_risk3 * risk3.2 + b_efficacy2 * efficacy2.2 +
+    b_efficacy3 * efficacy3.2 + b_oral * admin.2 + b_dose2 * doses2.2 +
+    b_dose3 * doses3.2 + b_imported * origin.2
+  V[["alt3"]] <- 0
+
   ### Define settings for MNL model component
-  nl_settings <- list(
+  mnl_settings <- list(
     alternatives = c(alt1 = 1, alt2 = 2, alt3 = 3),
     avail        = list(alt1 = 1, alt2 = 1, alt3 = 1),
     choiceVar    = choice,
-    V            = V,
-    nlNests      = nlNests,
-    nlStructure  = nlStructure
+    V            = V
   )
-  
+
   ### Compute probabilities using MNL model
-  P[['model']] = apollo_nl(nl_settings, functionality)
-  
+  P[["model"]] <- apollo_mnl(mnl_settings, functionality)
+
   ### Take product across observation for same individual
   P = apollo_panelProd(P, apollo_inputs, functionality)
-  
-  ### Using sampling weights in estimation and prediction
-  P = apollo_weighting(P, apollo_inputs, functionality)
-  
+
+  ### Average across inter-individual draws
+  P = apollo_avgInterDraws(P, apollo_inputs, functionality)
+
   ### Prepare and return outputs of function
   P = apollo_prepareProb(P, apollo_inputs, functionality)
   
+  ### Using sampling weights in estimation and prediction
+  # P = apollo_weighting(P, apollo_inputs, functionality)
+
   return(P)
 }
 
 # ####################################################### #
-#### 6. Model estimation                   ####
+#### 7. Model estimation                   ####
 # ####################################################### #
 fit <- apollo_estimate(apollo_beta, apollo_fixed, 
                        apollo_probabilities, apollo_inputs)
 
-save(fit, file = paste0(getwd(), "/Model/NL_weighted.RData"))
+save(fit, file = paste0(getwd(), "/ML_Exclude_duration.RData"))
+
+# apollo_modelOutput(fit, list(printPVal = TRUE)) # LL(final) = 
 ```
 
-#### report model results
+#### 2.5.4 Exclude efficacy
 
-```{r Result report}
-load(file = "Model/NL_weighted.RData")
-
-result_dat <- FormatResult(fit)
-# load function: FormatResult 
-write.csv(result_dat,file = "Result/NL_weighted.csv")
-```
-
-
-```{r nested logit model with province effect (expired)}
+```{r}
 # use apollo package to analyze
 # ####################################################### #
 #### 1. Definition of core settings                        
@@ -1949,164 +2365,751 @@ apollo_initialise()
 
 ### Set core controls
 apollo_control <- list(
-  modelName = "Nested logit",
-  modelDescr = "Two-level NL model to determine Adults' preferences for a vaccine product (With province level effect)",
-  indivID = "ID"
-#  ,weights = "weight" # apply sample weights
+  modelName = "Mixed logit model",
+  modelDescr = "Mixed logit model to determine Adults' preferences for a vaccine product",
+  indivID = "ID",
+  mixing = TRUE, # mixed logit model for random coefficients, FALSE for MNL model
+  nCores = 6
+  # weights = "weight" # apply sample weights
 )
 # ####################################################### #
 #### 2. Data loading                                   ####
 # ####################################################### #
 database <- read.csv(file = "Data/database.csv")
-socio_dat <- read.csv(file = "Data/socio_dat.csv")
-database <- database %>%
-  select(ID, price.1, risk2.1, risk3.1, duration2.1, duration3.1, efficacy2.1, efficacy3.1, admin.1, doses2.1, doses3.1, origin.1, price.2, risk2.2, risk3.2, duration2.2, duration3.2, efficacy2.2, efficacy3.2, admin.2, doses2.2, doses3.2, origin.2, choice) %>%
-  left_join(socio_dat, by = "ID")
+
+# database <- database[1:1440, ] # use a 1% of sample
+
+database <- subset(database, select = c("ID","price.1","risk2.1","risk3.1","duration2.1",
+                                     "duration3.1","efficacy2.1","efficacy3.1",
+                                     "admin.1","doses2.1","doses3.1","origin.1",
+                                     "price.2","risk2.2","risk3.2",
+                                     "duration2.2","duration3.2","efficacy2.2",
+                                     "efficacy3.2","admin.2","doses2.2",
+                                     "doses3.2","origin.2","choice","weight"))
+
 database <- as.data.frame(database)
 
 # ####################################################### #
 #### 3. Parameter definition                           ####
 # ####################################################### #
 
-### Vector of parameters, including any that are kept fixed 
+### Vector of parameters, including any that are kept fixed
 ### during estimation
 
 apollo_beta <- c(
-  asc     = 2.14,
-  b_price  = -0.00055,
-  b_risk2  = -0.354,
-  b_risk3  = -0.327,
-  b_duration2  = 0.144,
-  b_duration3 = 0.651,
-  b_efficacy2 = 0.292,
-  b_efficacy3 = 0.62,
-  b_oral = -0.0748,
-  b_dose2 = -0.046,
-  b_dose3 = -0.0556,
-  b_imported = -0.292,
-  b_Hebei1 = 0,
-  b_Shanxi2 = 0, 
-  b_Liaoning3 = 0,
-  b_Jilin4 = 0,
-  b_Heilongjiang5 = 0,
-  b_Jiangsu6 = 0,
-  b_Zhejiang7 = 0,
-  b_Anhui8 = 0,
-  b_Fujian9 = 0,
-  b_Jiangxi10 = 0,
-  b_Shandong11 = 0,
-  b_Henan12 = 0,
-  b_Hubei13 = 0,
-  b_Hunan14 = 0,
-  b_Guangdong15 = 0,
-  b_Hainan16 = 0,
-  b_Sichuan17 = 0,
-  b_Guizhou18 = 0,
-  b_Yunnan19 = 0,
-  b_Shaanxi20 = 0,
-  b_Gansu21 = 0,
-  b_Qinghai22 = 0,
-  b_Neimongol23 = 0,
-  b_Guangxi24 = 0,
-  b_Tibet25 = 0,
-  b_Ningxia26 = 0,
-  b_Xinjiang27 = 0,
-  b_Beijing28 = 0,
-  b_Shanghai29 = 0,
-  b_Tianjin30 = 0,
-  lambda_PT = 0.614
+  asc = 0,
+  b_price_mu = 0,
+  b_risk2_mu = 0,
+  b_risk3_mu = 0,
+  b_duration2_mu = 0,
+  b_duration3_mu = 0,
+  # b_efficacy2_mu = 0,
+  # b_efficacy3_mu = 0,
+  b_oral_mu = 0,
+  b_dose2_mu = 0,
+  b_dose3_mu = 0,
+  b_imported_mu = 0,
+  b_price_sigma = 0,
+  b_risk2_sigma = 0,
+  b_risk3_sigma = 0,
+  b_duration2_sigma = 0,
+  b_duration3_sigma = 0,
+  # b_efficacy2_sigma = 0,
+  # b_efficacy3_sigma = 0,
+  b_oral_sigma = 0,
+  b_dose2_sigma = 0,
+  b_dose3_sigma = 0,
+  b_imported_sigma = 0
 )
 
-### Vector with names (in quotes) of parameters to be
-###  kept fixed at their starting value in apollo_beta.
-### Use apollo_beta_fixed = c() for no fixed parameters.
+### Vector with names (in quotes) of parameters to be kept fixed at their starting value in apollo_beta, use apollo_beta_fixed = c() if none
+apollo_fixed <- c()
 
-apollo_fixed <- c() # no fixed parameters in our model
+# ################################################################# #
+#### 4. Define Random Components                                    ####
+# ################################################################# #
+
+### Set parameters for generating draws
+apollo_draws <- list(
+  interDrawsType = "mlhs",
+  interNDraws = 500,
+  interUnifDraws = c(),
+  interNormDraws = paste0("draws_", c(
+    "price", "risk2", "risk3", 
+    "duration2", "duration3",
+    "oral", "dose2", "dose3",
+    "imported"
+  )),
+  intraDrawsType = "",
+  intraNDraws = 0,
+  intraUnifDraws = c(),
+  intraNormDraws = c()
+)
+
+### Create random parameters
+apollo_randCoeff <- function(apollo_beta, apollo_inputs) {
+  randcoeff <- list()
+
+  randcoeff[["b_price"]] <- b_price_mu + b_price_sigma * draws_price
+  randcoeff[["b_risk2"]] <- b_risk2_mu + b_risk2_sigma * draws_risk2
+  randcoeff[["b_risk3"]] <- b_risk3_mu + b_risk3_sigma * draws_risk3
+  randcoeff[["b_duration2"]] <- b_duration2_mu + b_duration2_sigma * draws_duration2
+  randcoeff[["b_duration3"]] <- b_duration3_mu + b_duration3_sigma * draws_duration3
+  # randcoeff[["b_efficacy2"]] <- b_efficacy2_mu + b_efficacy2_sigma * draws_efficacy2
+  # randcoeff[["b_efficacy3"]] <- b_efficacy3_mu + b_efficacy3_sigma * draws_efficacy3
+  randcoeff[["b_oral"]] <- b_oral_mu + b_oral_sigma * draws_oral
+  randcoeff[["b_dose2"]] <- b_dose2_mu + b_dose2_sigma * draws_dose2
+  randcoeff[["b_dose3"]] <- b_dose3_mu + b_dose3_sigma * draws_dose3
+  randcoeff[["b_imported"]] <- b_imported_mu + b_imported_sigma * draws_imported
+
+  return(randcoeff)
+}
 
 # ####################################################### #
-#### 4. Input validation                               ####
+#### 5. Input validation                               ####
 # ####################################################### #
 
-apollo_inputs = apollo_validateInputs()
+apollo_inputs <- apollo_validateInputs()
 
 # ####################################################### #
-#### 5. Likelihood definition                          ####
+#### 6. Likelihood definition                          ####
 # ####################################################### #
 
-apollo_probabilities <- function(apollo_beta, apollo_inputs, functionality = "estimate"){
+apollo_probabilities <- function(apollo_beta, apollo_inputs, functionality = "estimate") {
   ### Attach inputs and detach after function exit
   apollo_attach(apollo_beta, apollo_inputs)
   on.exit(apollo_detach(apollo_beta, apollo_inputs))
-  
+
   ### Create list of probabilities P
   P <- list()
-  
-  ### Effect codings constraint
-  b_Chongqing31 = -b_Hebei1-b_Shanxi2-b_Liaoning3-b_Jilin4-b_Heilongjiang5-b_Jiangsu6-b_Zhejiang7-b_Anhui8-b_Fujian9-b_Jiangxi10-b_Shandong11-b_Henan12-b_Hubei13-b_Hunan14-b_Guangdong15-b_Hainan16-b_Sichuan17-b_Guizhou18-b_Yunnan19-b_Shaanxi20-b_Gansu21-b_Qinghai22-b_Neimongol23-b_Guangxi24-b_Tibet25-b_Ningxia26-b_Xinjiang27-b_Beijing28-b_Shanghai29-b_Tianjin30
-  
+
   V <- list()
-  
+
   ### List of utilities: these must use the same names as
-  ### in nl_settings, order is irrelevant.
-  V[['alt1']] = asc + b_price*price.1 + b_risk2*risk2.1 + b_risk3*risk3.1 + b_duration2*duration2.1 + b_duration3*duration3.1 + b_efficacy2*efficacy2.1 + b_efficacy3*efficacy3.1 + b_oral*admin.1 + b_dose2*doses2.1 + b_dose3*doses3.1 + b_imported*origin.1 + b_Hebei1*(province_31l == 1) + b_Shanxi2*(province_31l == 2) + b_Liaoning3 *(province_31l == 3) + b_Jilin4*(province_31l == 4) + b_Heilongjiang5*(province_31l == 5) + b_Jiangsu6*(province_31l == 6) + b_Zhejiang7*(province_31l == 7) + b_Anhui8*(province_31l == 8) + b_Fujian9*(province_31l == 9) + b_Jiangxi10*(province_31l == 10) + b_Shandong11*(province_31l == 11) + b_Henan12*(province_31l == 12) + b_Hubei13*(province_31l == 13) + b_Hunan14*(province_31l == 14) + b_Guangdong15*(province_31l == 15) + b_Hainan16*(province_31l == 16) + b_Sichuan17*(province_31l == 17) + b_Guizhou18*(province_31l == 18) + b_Yunnan19*(province_31l == 19) + b_Shaanxi20*(province_31l == 20) + b_Gansu21*(province_31l == 21) + b_Qinghai22*(province_31l == 22) + b_Neimongol23*(province_31l == 23) + b_Guangxi24*(province_31l == 24) + b_Tibet25*(province_31l == 25) + b_Ningxia26*(province_31l == 26) + b_Xinjiang27*(province_31l == 27) + b_Beijing28*(province_31l == 28) + b_Shanghai29*(province_31l == 29) + b_Tianjin30*(province_31l == 30) + b_Chongqing31*(province_31l == 31)
-  V[['alt2']] = asc + b_price*price.2 + b_risk2*risk2.2 + b_risk3*risk3.2 + b_duration2*duration2.2 + b_duration3*duration3.2 + b_efficacy2*efficacy2.2 + b_efficacy3*efficacy3.2 + b_oral*admin.2 + b_dose2*doses2.2 + b_dose3*doses3.2 + b_imported*origin.2 + b_Hebei1*(province_31l == 1) + b_Shanxi2*(province_31l == 2) + b_Liaoning3 *(province_31l == 3) + b_Jilin4*(province_31l == 4) + b_Heilongjiang5*(province_31l == 5) + b_Jiangsu6*(province_31l == 6) + b_Zhejiang7*(province_31l == 7) + b_Anhui8*(province_31l == 8) + b_Fujian9*(province_31l == 9) + b_Jiangxi10*(province_31l == 10) + b_Shandong11*(province_31l == 11) + b_Henan12*(province_31l == 12) + b_Hubei13*(province_31l == 13) + b_Hunan14*(province_31l == 14) + b_Guangdong15*(province_31l == 15) + b_Hainan16*(province_31l == 16) + b_Sichuan17*(province_31l == 17) + b_Guizhou18*(province_31l == 18) + b_Yunnan19*(province_31l == 19) + b_Shaanxi20*(province_31l == 20) + b_Gansu21*(province_31l == 21) + b_Qinghai22*(province_31l == 22) + b_Neimongol23*(province_31l == 23) + b_Guangxi24*(province_31l == 24) + b_Tibet25*(province_31l == 25) + b_Ningxia26*(province_31l == 26) + b_Xinjiang27*(province_31l == 27) + b_Beijing28*(province_31l == 28) + b_Shanghai29*(province_31l == 29) + b_Tianjin30*(province_31l == 30) + b_Chongqing31*(province_31l == 31)
-  V[['alt3']] = 0
-  
-  ### Specify nests for NL model
-  nlNests = list(root=1, PT=lambda_PT)
-  
-  ### Specify tree structure for NL model
-  nlStructure= list()
-  nlStructure[["root"]]   = c("alt3","PT")
-  nlStructure[["PT"]]     = c("alt1","alt2")
-  
+  ### in mnl_settings, order is irrelevant.
+  V[["alt1"]] <- asc + b_price * price.1 + b_risk2 * risk2.1 + 
+    b_risk3 * risk3.1 + b_duration2 * duration2.1 +
+    b_duration3 * duration3.1 + b_oral * admin.1 + b_dose2 * doses2.1 +
+    b_dose3 * doses3.1 + b_imported * origin.1
+  V[["alt2"]] <- asc + b_price * price.2 + b_risk2 * risk2.2 +
+    b_risk3 * risk3.2 + b_duration2 * duration2.2 +
+    b_duration3 * duration3.2 + b_oral * admin.2 + b_dose2 * doses2.2 +
+    b_dose3 * doses3.2 + b_imported * origin.2
+  V[["alt3"]] <- 0
+
   ### Define settings for MNL model component
-  nl_settings <- list(
+  mnl_settings <- list(
     alternatives = c(alt1 = 1, alt2 = 2, alt3 = 3),
     avail        = list(alt1 = 1, alt2 = 1, alt3 = 1),
     choiceVar    = choice,
-    V            = V,
-    nlNests      = nlNests,
-    nlStructure  = nlStructure
+    V            = V
   )
-  
+
   ### Compute probabilities using MNL model
-  P[['model']] = apollo_nl(nl_settings, functionality)
-  
+  P[["model"]] <- apollo_mnl(mnl_settings, functionality)
+
   ### Take product across observation for same individual
   P = apollo_panelProd(P, apollo_inputs, functionality)
-  
-  ### Using sampling weights in estimation and prediction
-#  P = apollo_weighting(P, apollo_inputs, functionality)
-  
+
+  ### Average across inter-individual draws
+  P = apollo_avgInterDraws(P, apollo_inputs, functionality)
+
   ### Prepare and return outputs of function
   P = apollo_prepareProb(P, apollo_inputs, functionality)
   
+  ### Using sampling weights in estimation and prediction
+  # P = apollo_weighting(P, apollo_inputs, functionality)
+
   return(P)
 }
 
 # ####################################################### #
-#### 6. Model estimation                   ####
+#### 7. Model estimation                   ####
 # ####################################################### #
 fit <- apollo_estimate(apollo_beta, apollo_fixed, 
                        apollo_probabilities, apollo_inputs)
 
-apollo_modelOutput(fit, list(printPVal = TRUE))
+save(fit, file = paste0(getwd(), "/ML_Exclude_efficacy.RData"))
 
-save(fit, FormatResult, )
+# apollo_modelOutput(fit, list(printPVal = TRUE)) # LL(final) = 
 ```
 
+#### 2.5.5 Exclude admin
 
-
-### 3.1 appendix Table 1: CL model 
-
-```{r appendix conditional logit model with weights}
+```{r}
 # use apollo package to analyze
 # ####################################################### #
 #### 1. Definition of core settings                        
 # ####################################################### #
 ### clear
-# rm(list = ls())
+rm(list = ls())
+
+### Load library
+library(apollo)
+
+### Initialise code
+apollo_initialise()
+
+### Set core controls
+apollo_control <- list(
+  modelName = "Mixed logit model",
+  modelDescr = "Mixed logit model to determine Adults' preferences for a vaccine product",
+  indivID = "ID",
+  mixing = TRUE, # mixed logit model for random coefficients, FALSE for MNL model
+  nCores = 6
+  # weights = "weight" # apply sample weights
+)
+# ####################################################### #
+#### 2. Data loading                                   ####
+# ####################################################### #
+database <- read.csv(file = "Data/database.csv")
+
+# database <- database[1:1440, ] # use a 1% of sample
+
+database <- subset(database, select = c("ID","price.1","risk2.1","risk3.1","duration2.1",
+                                     "duration3.1","efficacy2.1","efficacy3.1",
+                                     "admin.1","doses2.1","doses3.1","origin.1",
+                                     "price.2","risk2.2","risk3.2",
+                                     "duration2.2","duration3.2","efficacy2.2",
+                                     "efficacy3.2","admin.2","doses2.2",
+                                     "doses3.2","origin.2","choice","weight"))
+
+database <- as.data.frame(database)
+
+# ####################################################### #
+#### 3. Parameter definition                           ####
+# ####################################################### #
+
+### Vector of parameters, including any that are kept fixed
+### during estimation
+
+apollo_beta <- c(
+  asc = 0,
+  b_price_mu = 0,
+  b_risk2_mu = 0,
+  b_risk3_mu = 0,
+  b_duration2_mu = 0,
+  b_duration3_mu = 0,
+  b_efficacy2_mu = 0,
+  b_efficacy3_mu = 0,
+  # b_oral_mu = 0,
+  b_dose2_mu = 0,
+  b_dose3_mu = 0,
+  b_imported_mu = 0,
+  b_price_sigma = 0,
+  b_risk2_sigma = 0,
+  b_risk3_sigma = 0,
+  b_duration2_sigma = 0,
+  b_duration3_sigma = 0,
+  b_efficacy2_sigma = 0,
+  b_efficacy3_sigma = 0,
+  # b_oral_sigma = 0,
+  b_dose2_sigma = 0,
+  b_dose3_sigma = 0,
+  b_imported_sigma = 0
+)
+
+### Vector with names (in quotes) of parameters to be kept fixed at their starting value in apollo_beta, use apollo_beta_fixed = c() if none
+apollo_fixed <- c()
+
+# ################################################################# #
+#### 4. Define Random Components                                    ####
+# ################################################################# #
+
+### Set parameters for generating draws
+apollo_draws <- list(
+  interDrawsType = "mlhs",
+  interNDraws = 500,
+  interUnifDraws = c(),
+  interNormDraws = paste0("draws_", c(
+    "price", "risk2", "risk3", 
+    "duration2", "duration3",
+    "efficacy2", "efficacy3", 
+    "dose2", "dose3",
+    "imported"
+  )),
+  intraDrawsType = "",
+  intraNDraws = 0,
+  intraUnifDraws = c(),
+  intraNormDraws = c()
+)
+
+### Create random parameters
+apollo_randCoeff <- function(apollo_beta, apollo_inputs) {
+  randcoeff <- list()
+
+  randcoeff[["b_price"]] <- b_price_mu + b_price_sigma * draws_price
+  randcoeff[["b_risk2"]] <- b_risk2_mu + b_risk2_sigma * draws_risk2
+  randcoeff[["b_risk3"]] <- b_risk3_mu + b_risk3_sigma * draws_risk3
+  randcoeff[["b_duration2"]] <- b_duration2_mu + b_duration2_sigma * draws_duration2
+  randcoeff[["b_duration3"]] <- b_duration3_mu + b_duration3_sigma * draws_duration3
+  randcoeff[["b_efficacy2"]] <- b_efficacy2_mu + b_efficacy2_sigma * draws_efficacy2
+  randcoeff[["b_efficacy3"]] <- b_efficacy3_mu + b_efficacy3_sigma * draws_efficacy3
+  # randcoeff[["b_oral"]] <- b_oral_mu + b_oral_sigma * draws_oral
+  randcoeff[["b_dose2"]] <- b_dose2_mu + b_dose2_sigma * draws_dose2
+  randcoeff[["b_dose3"]] <- b_dose3_mu + b_dose3_sigma * draws_dose3
+  randcoeff[["b_imported"]] <- b_imported_mu + b_imported_sigma * draws_imported
+
+  return(randcoeff)
+}
+
+# ####################################################### #
+#### 5. Input validation                               ####
+# ####################################################### #
+
+apollo_inputs <- apollo_validateInputs()
+
+# ####################################################### #
+#### 6. Likelihood definition                          ####
+# ####################################################### #
+
+apollo_probabilities <- function(apollo_beta, apollo_inputs, functionality = "estimate") {
+  ### Attach inputs and detach after function exit
+  apollo_attach(apollo_beta, apollo_inputs)
+  on.exit(apollo_detach(apollo_beta, apollo_inputs))
+
+  ### Create list of probabilities P
+  P <- list()
+
+  V <- list()
+
+  ### List of utilities: these must use the same names as
+  ### in mnl_settings, order is irrelevant.
+  V[["alt1"]] <- asc + b_price * price.1 + b_risk2 * risk2.1 + 
+    b_risk3 * risk3.1 + b_duration2 * duration2.1 + 
+    b_duration3 * duration3.1 + b_efficacy2 * efficacy2.1 +
+    b_efficacy3 * efficacy3.1 + b_dose2 * doses2.1 +
+    b_dose3 * doses3.1 + b_imported * origin.1
+  V[["alt2"]] <- asc + b_price * price.2 + b_risk2 * risk2.2 +
+    b_risk3 * risk3.2 + b_duration2 * duration2.2 + 
+    b_duration3 * duration3.2 + b_efficacy2 * efficacy2.2 +
+    b_efficacy3 * efficacy3.2 + b_dose2 * doses2.2 +
+    b_dose3 * doses3.2 + b_imported * origin.2
+  V[["alt3"]] <- 0
+
+  ### Define settings for MNL model component
+  mnl_settings <- list(
+    alternatives = c(alt1 = 1, alt2 = 2, alt3 = 3),
+    avail        = list(alt1 = 1, alt2 = 1, alt3 = 1),
+    choiceVar    = choice,
+    V            = V
+  )
+
+  ### Compute probabilities using MNL model
+  P[["model"]] <- apollo_mnl(mnl_settings, functionality)
+
+  ### Take product across observation for same individual
+  P = apollo_panelProd(P, apollo_inputs, functionality)
+
+  ### Average across inter-individual draws
+  P = apollo_avgInterDraws(P, apollo_inputs, functionality)
+
+  ### Prepare and return outputs of function
+  P = apollo_prepareProb(P, apollo_inputs, functionality)
+  
+  ### Using sampling weights in estimation and prediction
+  # P = apollo_weighting(P, apollo_inputs, functionality)
+
+  return(P)
+}
+
+# ####################################################### #
+#### 7. Model estimation                   ####
+# ####################################################### #
+fit <- apollo_estimate(apollo_beta, apollo_fixed, 
+                       apollo_probabilities, apollo_inputs)
+
+save(fit, file = paste0(getwd(), "/ML_Exclude_admin.RData"))
+
+# apollo_modelOutput(fit, list(printPVal = TRUE)) # LL(final) = 
+
+```
+
+#### 2.5.6 Exclude doses
+
+```{r}
+# use apollo package to analyze
+# ####################################################### #
+#### 1. Definition of core settings                        
+# ####################################################### #
+### clear
+rm(list = ls())
+
+### Load library
+library(apollo)
+
+### Initialise code
+apollo_initialise()
+
+### Set core controls
+apollo_control <- list(
+  modelName = "Mixed logit model",
+  modelDescr = "Mixed logit model to determine Adults' preferences for a vaccine product",
+  indivID = "ID",  
+  mixing = TRUE, # mixed logit model for random coefficients, FALSE for MNL model
+  nCores = 6
+  # weights = "weight" # apply sample weights
+)
+# ####################################################### #
+#### 2. Data loading                                   ####
+# ####################################################### #
+database <- read.csv(file = "Data/database.csv")
+
+# database <- database[1:1440, ] # use a 1% of sample
+
+database <- subset(database, select = c("ID","price.1","risk2.1","risk3.1","duration2.1",
+                                     "duration3.1","efficacy2.1","efficacy3.1",
+                                     "admin.1","doses2.1","doses3.1","origin.1",
+                                     "price.2","risk2.2","risk3.2",
+                                     "duration2.2","duration3.2","efficacy2.2",
+                                     "efficacy3.2","admin.2","doses2.2",
+                                     "doses3.2","origin.2","choice","weight"))
+
+database <- as.data.frame(database)
+
+# ####################################################### #
+#### 3. Parameter definition                           ####
+# ####################################################### #
+
+### Vector of parameters, including any that are kept fixed
+### during estimation
+
+apollo_beta <- c(
+  asc = 0,
+  b_price_mu = 0,
+  b_risk2_mu = 0,
+  b_risk3_mu = 0,
+  b_duration2_mu = 0,
+  b_duration3_mu = 0,
+  b_efficacy2_mu = 0,
+  b_efficacy3_mu = 0,
+  b_oral_mu = 0,
+  # b_dose2_mu = 0,
+  # b_dose3_mu = 0,
+  b_imported_mu = 0,
+  b_price_sigma = 0,
+  b_risk2_sigma = 0,
+  b_risk3_sigma = 0,
+  b_duration2_sigma = 0,
+  b_duration3_sigma = 0,
+  b_efficacy2_sigma = 0,
+  b_efficacy3_sigma = 0,
+  b_oral_sigma = 0,
+  # b_dose2_sigma = 0,
+  # b_dose3_sigma = 0,
+  b_imported_sigma = 0
+)
+
+### Vector with names (in quotes) of parameters to be kept fixed at their starting value in apollo_beta, use apollo_beta_fixed = c() if none
+apollo_fixed <- c()
+
+# ################################################################# #
+#### 4. Define Random Components                                    ####
+# ################################################################# #
+
+### Set parameters for generating draws
+apollo_draws <- list(
+  interDrawsType = "mlhs",
+  interNDraws = 500,
+  interUnifDraws = c(),
+  interNormDraws = paste0("draws_", c(
+    "price", "risk2", "risk3",
+    "duration2", "duration3",
+    "efficacy2", "efficacy3", "oral",
+    "imported"
+  )),
+  intraDrawsType = "",
+  intraNDraws = 0,
+  intraUnifDraws = c(),
+  intraNormDraws = c()
+)
+
+### Create random parameters
+apollo_randCoeff <- function(apollo_beta, apollo_inputs) {
+  randcoeff <- list()
+
+  randcoeff[["b_price"]] <- b_price_mu + b_price_sigma * draws_price
+  randcoeff[["b_risk2"]] <- b_risk2_mu + b_risk2_sigma * draws_risk2
+  randcoeff[["b_risk3"]] <- b_risk3_mu + b_risk3_sigma * draws_risk3
+  randcoeff[["b_duration2"]] <- b_duration2_mu + b_duration2_sigma * draws_duration2
+  randcoeff[["b_duration3"]] <- b_duration3_mu + b_duration3_sigma * draws_duration3
+  randcoeff[["b_efficacy2"]] <- b_efficacy2_mu + b_efficacy2_sigma * draws_efficacy2
+  randcoeff[["b_efficacy3"]] <- b_efficacy3_mu + b_efficacy3_sigma * draws_efficacy3
+  randcoeff[["b_oral"]] <- b_oral_mu + b_oral_sigma * draws_oral
+  # randcoeff[["b_dose2"]] <- b_dose2_mu + b_dose2_sigma * draws_dose2
+  # randcoeff[["b_dose3"]] <- b_dose3_mu + b_dose3_sigma * draws_dose3
+  randcoeff[["b_imported"]] <- b_imported_mu + b_imported_sigma * draws_imported
+
+  return(randcoeff)
+}
+
+# ####################################################### #
+#### 5. Input validation                               ####
+# ####################################################### #
+
+apollo_inputs <- apollo_validateInputs()
+
+# ####################################################### #
+#### 6. Likelihood definition                          ####
+# ####################################################### #
+
+apollo_probabilities <- function(apollo_beta, apollo_inputs, functionality = "estimate") {
+  ### Attach inputs and detach after function exit
+  apollo_attach(apollo_beta, apollo_inputs)
+  on.exit(apollo_detach(apollo_beta, apollo_inputs))
+
+  ### Create list of probabilities P
+  P <- list()
+
+  V <- list()
+
+  ### List of utilities: these must use the same names as
+  ### in mnl_settings, order is irrelevant.
+  V[["alt1"]] <- asc + b_price * price.1 + b_risk2 * risk2.1 + 
+    b_risk3 * risk3.1 + b_duration2 * duration2.1 +
+    b_duration3 * duration3.1 + b_efficacy2 * efficacy2.1 +
+    b_efficacy3 * efficacy3.1 + b_oral * admin.1 + b_imported * origin.1
+  V[["alt2"]] <- asc + b_price * price.2 + b_risk2 * risk2.2 +
+    b_risk3 * risk3.2 + b_duration2 * duration2.2 + 
+    b_duration3 * duration3.2 + b_efficacy2 * efficacy2.2 +
+    b_efficacy3 * efficacy3.2 + b_oral * admin.2 + b_imported * origin.2
+  V[["alt3"]] <- 0
+
+  ### Define settings for MNL model component
+  mnl_settings <- list(
+    alternatives = c(alt1 = 1, alt2 = 2, alt3 = 3),
+    avail        = list(alt1 = 1, alt2 = 1, alt3 = 1),
+    choiceVar    = choice,
+    V            = V
+  )
+
+  ### Compute probabilities using MNL model
+  P[["model"]] <- apollo_mnl(mnl_settings, functionality)
+
+  ### Take product across observation for same individual
+  P = apollo_panelProd(P, apollo_inputs, functionality)
+
+  ### Average across inter-individual draws
+  P = apollo_avgInterDraws(P, apollo_inputs, functionality)
+
+  ### Prepare and return outputs of function
+  P = apollo_prepareProb(P, apollo_inputs, functionality)
+  
+  ### Using sampling weights in estimation and prediction
+  # P = apollo_weighting(P, apollo_inputs, functionality)
+
+  return(P)
+}
+
+# ####################################################### #
+#### 7. Model estimation                   ####
+# ####################################################### #
+fit <- apollo_estimate(apollo_beta, apollo_fixed, 
+                       apollo_probabilities, apollo_inputs)
+
+save(fit, file = paste0(getwd(), "/ML_Exclude_doses.RData"))
+
+# apollo_modelOutput(fit, list(printPVal = TRUE)) # LL(final) = 
+```
+
+#### 2.5.7 Exclude origin
+
+```{r}
+# use apollo package to analyze
+# ####################################################### #
+#### 1. Definition of core settings                        
+# ####################################################### #
+### clear
+rm(list = ls())
+
+### Load library
+library(apollo)
+
+### Initialise code
+apollo_initialise()
+
+### Set core controls
+apollo_control <- list(
+  modelName = "Mixed logit model",
+  modelDescr = "Mixed logit model to determine Adults' preferences for a vaccine product",
+  indivID = "ID",  
+  mixing = TRUE, # mixed logit model for random coefficients, FALSE for MNL model
+  nCores = 6
+  # weights = "weight" # apply sample weights
+)
+# ####################################################### #
+#### 2. Data loading                                   ####
+# ####################################################### #
+database <- read.csv(file = "Data/database.csv")
+
+# database <- database[1:1440, ] # use a 1% of sample
+
+database <- subset(database, select = c("ID","price.1","risk2.1","risk3.1","duration2.1",
+                                     "duration3.1","efficacy2.1","efficacy3.1",
+                                     "admin.1","doses2.1","doses3.1","origin.1",
+                                     "price.2","risk2.2","risk3.2",
+                                     "duration2.2","duration3.2","efficacy2.2",
+                                     "efficacy3.2","admin.2","doses2.2",
+                                     "doses3.2","origin.2","choice","weight"))
+
+database <- as.data.frame(database)
+
+# ####################################################### #
+#### 3. Parameter definition                           ####
+# ####################################################### #
+
+### Vector of parameters, including any that are kept fixed
+### during estimation
+
+apollo_beta <- c(
+  asc = 0,
+  b_price_mu = 0,
+  b_risk2_mu = 0,
+  b_risk3_mu = 0,
+  b_duration2_mu = 0,
+  b_duration3_mu = 0,
+  b_efficacy2_mu = 0,
+  b_efficacy3_mu = 0,
+  b_oral_mu = 0,
+  b_dose2_mu = 0,
+  b_dose3_mu = 0,
+  # b_imported_mu = 0,
+  b_price_sigma = 0,
+  b_risk2_sigma = 0,
+  b_risk3_sigma = 0,
+  b_duration2_sigma = 0,
+  b_duration3_sigma = 0,
+  b_efficacy2_sigma = 0,
+  b_efficacy3_sigma = 0,
+  b_oral_sigma = 0,
+  b_dose2_sigma = 0,
+  b_dose3_sigma = 0,
+  # b_imported_sigma = 0
+)
+
+### Vector with names (in quotes) of parameters to be kept fixed at their starting value in apollo_beta, use apollo_beta_fixed = c() if none
+apollo_fixed <- c()
+
+# ################################################################# #
+#### 4. Define Random Components                                    ####
+# ################################################################# #
+
+### Set parameters for generating draws
+apollo_draws <- list(
+  interDrawsType = "mlhs",
+  interNDraws = 500,
+  interUnifDraws = c(),
+  interNormDraws = paste0("draws_", c(
+    "price", "risk2", "risk3", 
+    "duration2", "duration3",
+    "efficacy2", "efficacy3", "oral",
+    "dose2", "dose3"
+  )),
+  intraDrawsType = "",
+  intraNDraws = 0,
+  intraUnifDraws = c(),
+  intraNormDraws = c()
+)
+
+### Create random parameters
+apollo_randCoeff <- function(apollo_beta, apollo_inputs) {
+  randcoeff <- list()
+
+  randcoeff[["b_price"]] <- b_price_mu + b_price_sigma * draws_price
+  randcoeff[["b_risk2"]] <- b_risk2_mu + b_risk2_sigma * draws_risk2
+  randcoeff[["b_risk3"]] <- b_risk3_mu + b_risk3_sigma * draws_risk3
+  randcoeff[["b_duration2"]] <- b_duration2_mu + b_duration2_sigma * draws_duration2
+  randcoeff[["b_duration3"]] <- b_duration3_mu + b_duration3_sigma * draws_duration3
+  randcoeff[["b_efficacy2"]] <- b_efficacy2_mu + b_efficacy2_sigma * draws_efficacy2
+  randcoeff[["b_efficacy3"]] <- b_efficacy3_mu + b_efficacy3_sigma * draws_efficacy3
+  randcoeff[["b_oral"]] <- b_oral_mu + b_oral_sigma * draws_oral
+  randcoeff[["b_dose2"]] <- b_dose2_mu + b_dose2_sigma * draws_dose2
+  randcoeff[["b_dose3"]] <- b_dose3_mu + b_dose3_sigma * draws_dose3
+  # randcoeff[["b_imported"]] <- b_imported_mu + b_imported_sigma * draws_imported
+
+  return(randcoeff)
+}
+
+# ####################################################### #
+#### 5. Input validation                               ####
+# ####################################################### #
+
+apollo_inputs <- apollo_validateInputs()
+
+# ####################################################### #
+#### 6. Likelihood definition                          ####
+# ####################################################### #
+
+apollo_probabilities <- function(apollo_beta, apollo_inputs, functionality = "estimate") {
+  ### Attach inputs and detach after function exit
+  apollo_attach(apollo_beta, apollo_inputs)
+  on.exit(apollo_detach(apollo_beta, apollo_inputs))
+
+  ### Create list of probabilities P
+  P <- list()
+
+  V <- list()
+
+  ### List of utilities: these must use the same names as
+  ### in mnl_settings, order is irrelevant.
+  V[["alt1"]] <- asc + b_price * price.1 + b_risk2 * risk2.1 + 
+    b_risk3 * risk3.1 + b_duration2 * duration2.1 + 
+    b_duration3 * duration3.1 + b_efficacy2 * efficacy2.1 +
+    b_efficacy3 * efficacy3.1 + b_oral * admin.1 + b_dose2 * doses2.1 +
+    b_dose3 * doses3.1
+  V[["alt2"]] <- asc + b_price * price.2 + b_risk2 * risk2.2 +
+    b_risk3 * risk3.2 + b_duration2 * duration2.2 + 
+    b_duration3 * duration3.2 + b_efficacy2 * efficacy2.2 +
+    b_efficacy3 * efficacy3.2 + b_oral * admin.2 + b_dose2 * doses2.2 +
+    b_dose3 * doses3.2
+  V[["alt3"]] <- 0
+
+  ### Define settings for MNL model component
+  mnl_settings <- list(
+    alternatives = c(alt1 = 1, alt2 = 2, alt3 = 3),
+    avail        = list(alt1 = 1, alt2 = 1, alt3 = 1),
+    choiceVar    = choice,
+    V            = V
+  )
+
+  ### Compute probabilities using MNL model
+  P[["model"]] <- apollo_mnl(mnl_settings, functionality)
+
+  ### Take product across observation for same individual
+  P = apollo_panelProd(P, apollo_inputs, functionality)
+
+  ### Average across inter-individual draws
+  P = apollo_avgInterDraws(P, apollo_inputs, functionality)
+
+  ### Prepare and return outputs of function
+  P = apollo_prepareProb(P, apollo_inputs, functionality)
+  
+  ### Using sampling weights in estimation and prediction
+  # P = apollo_weighting(P, apollo_inputs, functionality)
+
+  return(P)
+}
+
+# ####################################################### #
+#### 7. Model estimation                   ####
+# ####################################################### #
+fit <- apollo_estimate(apollo_beta, apollo_fixed, 
+                       apollo_probabilities, apollo_inputs)
+
+save(fit, file = paste0(getwd(), "/ML_Exclude_origin.RData"))
+
+# apollo_modelOutput(fit, list(printPVal = TRUE)) # LL(final) = 
+```
+
+## 3. Appendix Table 1: Conditional logit model
+
+```{r appendix conditional logit model}
+# use apollo package to analyze
+# ####################################################### #
+#### 1. Definition of core settings                        
+# ####################################################### #
+### clear
+rm(list = ls())
 
 ### Load library
 library(apollo)
@@ -2118,8 +3121,8 @@ apollo_initialise()
 apollo_control <- list(
   modelName = "MNL",
   modelDescr = "Adults' preferences for a vaccine product",
-  indivID = "ID",
-  weights = "weight" # apply sample weights
+  indivID = "ID"
+  #,weights = "weight" # apply sample weights
 )
 # ####################################################### #
 #### 2. Data loading                                   ####
@@ -2210,7 +3213,7 @@ apollo_probabilities <- function(apollo_beta, apollo_inputs, functionality = "es
   P = apollo_panelProd(P, apollo_inputs, functionality)
   
   ### Using sampling weights in estimation and prediction
-  P = apollo_weighting(P, apollo_inputs, functionality)
+  #P = apollo_weighting(P, apollo_inputs, functionality)
   
   ### Prepare and return outputs of function
   P = apollo_prepareProb(P, apollo_inputs, functionality)
@@ -2224,2110 +3227,44 @@ apollo_probabilities <- function(apollo_beta, apollo_inputs, functionality = "es
 fit <- apollo_estimate(apollo_beta, apollo_fixed, 
                        apollo_probabilities, apollo_inputs)
 
-save(fit, file = "Model/CL_weighted.RData")
+save(fit, file = "Model/CL.RData")
 ```
 
+### 3.1 Report the CL model result
+
 ```{r}
-load(file = "Model/CL_weighted.RData")
+load(file = "Model/CL.RData")
+
+# function: Format DCE model output for the nested/conditional logit model
+FormatResult <- function(apollo_model, df=143998){
+  beta_dat <- as.data.frame(apollo_modelOutput(apollo_model, list(printPVal = TRUE)))[,c(1,5,7)] %>%
+    rename(p_value = `p(1-sided)`) %>%
+    mutate(
+      `2.5%` = Estimate + qnorm(0.025)*Rob.s.e.,
+      `97.5%` = Estimate + qnorm(0.975)*Rob.s.e.
+    ) %>%
+    dplyr::select(Estimate, `2.5%`, `97.5%`, p_value)
+  var_name <- names(coef(apollo_model))
+  beta_dat$WTP <- NA_real_
+  beta_dat$WTP_p_value <- NA_real_
+  for (i in c(1:length(var_name))) {
+    if (var_name[i]!="b_price"){
+      temp<-apollo_deltaMethod(apollo_model, deltaMethod_settings = list(operation = "ratio", 
+                                                                parName1 = var_name[i], 
+                                                                parName2 = "b_price", 
+                                                                multPar1 = -1))
+      beta_dat[var_name[i], "WTP"] = temp[1]
+      # one sided p value
+      beta_dat[var_name[i],"WTP_p_value"] = ifelse(temp[3]>0,2*(1-pt(temp[3],df)),2*pt(temp[3],df))
+    }
+  }
+  beta_dat <- beta_dat %>% mutate_at(vars(ends_with("p_value")), function(v) ifelse(v<1e-3,"<0.001",v))
+  return(beta_dat)
+}
 # ####################################################### #
 #### 7. Report result                ####
 # ####################################################### #
 result_dat <- FormatResult(fit)
 
-write.csv(result_dat,file = "Result/CL_weighted.csv")
-```
-
-### 3.2 relative importance of the attributes
-
-Exclude price
-
-```{r}
-# use apollo package to analyze
-# ####################################################### #
-#### 1. Definition of core settings                        
-# ####################################################### #
-### clear
-rm(list = ls())
-
-### Load library
-library(apollo)
-
-### Initialise code
-apollo_initialise()
-
-### Set core controls
-apollo_control <- list(
-  modelName = "Nested logit",
-  modelDescr = "Two-level NL model to determine Adults' preferences for a vaccine product",
-  indivID = "ID",
-  weights = "weight" # apply sample weights
-)
-# ####################################################### #
-#### 2. Data loading                                   ####
-# ####################################################### #
-database <- read.csv(file = "Data/database.csv")
-database <- subset(database, select = c("ID","price.1","risk2.1","risk3.1","duration2.1",
-                                     "duration3.1","efficacy2.1","efficacy3.1",
-                                     "admin.1","doses2.1","doses3.1","origin.1",
-                                     "price.2","risk2.2","risk3.2",
-                                     "duration2.2","duration3.2","efficacy2.2",
-                                     "efficacy3.2","admin.2","doses2.2",
-                                     "doses3.2","origin.2","choice","weight"))
-
-database <- as.data.frame(database)
-
-# ####################################################### #
-#### 3. Parameter definition                           ####
-# ####################################################### #
-
-### Vector of parameters, including any that are kept fixed 
-### during estimation
-
-apollo_beta <- c(
-  asc     = 2.14,
-  # b_price  = -0.00055,
-  b_risk2  = -0.354,
-  b_risk3  = -0.327,
-  b_duration2  = 0.144,
-  b_duration3 = 0.651,
-  b_efficacy2 = 0.292,
-  b_efficacy3 = 0.62,
-  b_oral = -0.0748,
-  b_dose2 = -0.046,
-  b_dose3 = -0.0556,
-  b_imported = -0.292,
-  lambda_PT = 0.614
-)
-
-### Vector with names (in quotes) of parameters to be
-###  kept fixed at their starting value in apollo_beta.
-### Use apollo_beta_fixed = c() for no fixed parameters.
-
-apollo_fixed <- c() # no fixed parameters in our model
-
-# ####################################################### #
-#### 4. Input validation                               ####
-# ####################################################### #
-
-apollo_inputs = apollo_validateInputs()
-
-# ####################################################### #
-#### 5. Likelihood definition                          ####
-# ####################################################### #
-
-apollo_probabilities <- function(apollo_beta, apollo_inputs, functionality = "estimate"){
-  ### Attach inputs and detach after function exit
-  apollo_attach(apollo_beta, apollo_inputs)
-  on.exit(apollo_detach(apollo_beta, apollo_inputs))
-  
-  ### Create list of probabilities P
-  P <- list()
-  
-  V <- list()
-  
-  ### List of utilities: these must use the same names as
-  ### in nl_settings, order is irrelevant.
-  V[['alt1']] = asc + b_risk2*risk2.1 + b_risk3*risk3.1 + b_duration2*duration2.1 + b_duration3*duration3.1 + b_efficacy2*efficacy2.1 + b_efficacy3*efficacy3.1 + b_oral*admin.1 + b_dose2*doses2.1 + b_dose3*doses3.1 + b_imported*origin.1
-  V[['alt2']] = asc + b_risk2*risk2.2 + b_risk3*risk3.2 + b_duration2*duration2.2 + b_duration3*duration3.2 + b_efficacy2*efficacy2.2 + b_efficacy3*efficacy3.2 + b_oral*admin.2 + b_dose2*doses2.2 + b_dose3*doses3.2 + b_imported*origin.2
-  V[['alt3']] = 0
-  
-  ### Specify nests for NL model
-  nlNests = list(root=1, PT=lambda_PT)
-  
-  ### Specify tree structure for NL model
-  nlStructure= list()
-  nlStructure[["root"]]   = c("alt3","PT")
-  nlStructure[["PT"]]     = c("alt1","alt2")
-  
-  ### Define settings for MNL model component
-  nl_settings <- list(
-    alternatives = c(alt1 = 1, alt2 = 2, alt3 = 3),
-    avail        = list(alt1 = 1, alt2 = 1, alt3 = 1),
-    choiceVar    = choice,
-    V            = V,
-    nlNests      = nlNests,
-    nlStructure  = nlStructure
-  )
-  
-  ### Compute probabilities using MNL model
-  P[['model']] = apollo_nl(nl_settings, functionality)
-  
-  ### Take product across observation for same individual
-  P = apollo_panelProd(P, apollo_inputs, functionality)
-  
-  ### Using sampling weights in estimation and prediction
-  P = apollo_weighting(P, apollo_inputs, functionality)
-  
-  ### Prepare and return outputs of function
-  P = apollo_prepareProb(P, apollo_inputs, functionality)
-  
-  return(P)
-}
-
-# ####################################################### #
-#### 6. Model estimation                   ####
-# ####################################################### #
-fit <- apollo_estimate(apollo_beta, apollo_fixed, 
-                       apollo_probabilities, apollo_inputs)
-
-apollo_modelOutput(fit, list(printPVal = TRUE)) # LL(final) = -115229.78
-```
-
-Exclude origin
-
-```{r}
-# use apollo package to analyze
-# ####################################################### #
-#### 1. Definition of core settings                        
-# ####################################################### #
-### clear
-rm(list = ls())
-
-### Load library
-library(apollo)
-
-### Initialise code
-apollo_initialise()
-
-### Set core controls
-apollo_control <- list(
-  modelName = "Nested logit",
-  modelDescr = "Two-level NL model to determine Adults' preferences for a vaccine product",
-  indivID = "ID",
-  weights = "weight" # apply sample weights
-)
-# ####################################################### #
-#### 2. Data loading                                   ####
-# ####################################################### #
-database <- read.csv(file = "Data/database.csv")
-database <- subset(database, select = c("ID","price.1","risk2.1","risk3.1","duration2.1",
-                                     "duration3.1","efficacy2.1","efficacy3.1",
-                                     "admin.1","doses2.1","doses3.1","origin.1",
-                                     "price.2","risk2.2","risk3.2",
-                                     "duration2.2","duration3.2","efficacy2.2",
-                                     "efficacy3.2","admin.2","doses2.2",
-                                     "doses3.2","origin.2","choice","weight"))
-
-database <- as.data.frame(database)
-
-# ####################################################### #
-#### 3. Parameter definition                           ####
-# ####################################################### #
-
-### Vector of parameters, including any that are kept fixed 
-### during estimation
-
-apollo_beta <- c(
-  asc     = 2.14,
-  b_price  = -0.00055,
-  b_risk2  = -0.354,
-  b_risk3  = -0.327,
-  b_duration2  = 0.144,
-  b_duration3 = 0.651,
-  b_efficacy2 = 0.292,
-  b_efficacy3 = 0.62,
-  b_oral = -0.0748,
-  b_dose2 = -0.046,
-  b_dose3 = -0.0556,
-  # b_imported = -0.292,
-  lambda_PT = 0.614
-)
-
-### Vector with names (in quotes) of parameters to be
-###  kept fixed at their starting value in apollo_beta.
-### Use apollo_beta_fixed = c() for no fixed parameters.
-
-apollo_fixed <- c() # no fixed parameters in our model
-
-# ####################################################### #
-#### 4. Input validation                               ####
-# ####################################################### #
-
-apollo_inputs = apollo_validateInputs()
-
-# ####################################################### #
-#### 5. Likelihood definition                          ####
-# ####################################################### #
-
-apollo_probabilities <- function(apollo_beta, apollo_inputs, functionality = "estimate"){
-  ### Attach inputs and detach after function exit
-  apollo_attach(apollo_beta, apollo_inputs)
-  on.exit(apollo_detach(apollo_beta, apollo_inputs))
-  
-  ### Create list of probabilities P
-  P <- list()
-  
-  V <- list()
-  
-  ### List of utilities: these must use the same names as
-  ### in nl_settings, order is irrelevant.
-  V[['alt1']] = asc + b_price*price.1 + b_risk2*risk2.1 + b_risk3*risk3.1 + b_duration2*duration2.1 + b_duration3*duration3.1 + b_efficacy2*efficacy2.1 + b_efficacy3*efficacy3.1 + b_oral*admin.1 + b_dose2*doses2.1 + b_dose3*doses3.1
-  V[['alt2']] = asc + b_price*price.2 + b_risk2*risk2.2 + b_risk3*risk3.2 + b_duration2*duration2.2 + b_duration3*duration3.2 + b_efficacy2*efficacy2.2 + b_efficacy3*efficacy3.2 + b_oral*admin.2 + b_dose2*doses2.2 + b_dose3*doses3.2
-  V[['alt3']] = 0
-  
-  ### Specify nests for NL model
-  nlNests = list(root=1, PT=lambda_PT)
-  
-  ### Specify tree structure for NL model
-  nlStructure= list()
-  nlStructure[["root"]]   = c("alt3","PT")
-  nlStructure[["PT"]]     = c("alt1","alt2")
-  
-  ### Define settings for MNL model component
-  nl_settings <- list(
-    alternatives = c(alt1 = 1, alt2 = 2, alt3 = 3),
-    avail        = list(alt1 = 1, alt2 = 1, alt3 = 1),
-    choiceVar    = choice,
-    V            = V,
-    nlNests      = nlNests,
-    nlStructure  = nlStructure
-  )
-  
-  ### Compute probabilities using MNL model
-  P[['model']] = apollo_nl(nl_settings, functionality)
-  
-  ### Take product across observation for same individual
-  P = apollo_panelProd(P, apollo_inputs, functionality)
-  
-  ### Using sampling weights in estimation and prediction
-  P = apollo_weighting(P, apollo_inputs, functionality)
-  
-  ### Prepare and return outputs of function
-  P = apollo_prepareProb(P, apollo_inputs, functionality)
-  
-  return(P)
-}
-
-# ####################################################### #
-#### 6. Model estimation                   ####
-# ####################################################### #
-fit <- apollo_estimate(apollo_beta, apollo_fixed, 
-                       apollo_probabilities, apollo_inputs)
-
-apollo_modelOutput(fit, list(printPVal = TRUE)) # LL(final) = -115502.1
-```
-
-Exclude doses
-
-```{r}
-# use apollo package to analyze
-# ####################################################### #
-#### 1. Definition of core settings                        
-# ####################################################### #
-### clear
-rm(list = ls())
-
-### Load library
-library(apollo)
-
-### Initialise code
-apollo_initialise()
-
-### Set core controls
-apollo_control <- list(
-  modelName = "Nested logit",
-  modelDescr = "Two-level NL model to determine Adults' preferences for a vaccine product",
-  indivID = "ID",
-  weights = "weight" # apply sample weights
-)
-# ####################################################### #
-#### 2. Data loading                                   ####
-# ####################################################### #
-database <- read.csv(file = "Data/database.csv")
-database <- subset(database, select = c("ID","price.1","risk2.1","risk3.1","duration2.1",
-                                     "duration3.1","efficacy2.1","efficacy3.1",
-                                     "admin.1","doses2.1","doses3.1","origin.1",
-                                     "price.2","risk2.2","risk3.2",
-                                     "duration2.2","duration3.2","efficacy2.2",
-                                     "efficacy3.2","admin.2","doses2.2",
-                                     "doses3.2","origin.2","choice","weight"))
-
-database <- as.data.frame(database)
-
-# ####################################################### #
-#### 3. Parameter definition                           ####
-# ####################################################### #
-
-### Vector of parameters, including any that are kept fixed 
-### during estimation
-
-apollo_beta <- c(
-  asc     = 2.14,
-  b_price  = -0.00055,
-  b_risk2  = -0.354,
-  b_risk3  = -0.327,
-  b_duration2  = 0.144,
-  b_duration3 = 0.651,
-  b_efficacy2 = 0.292,
-  b_efficacy3 = 0.62,
-  b_oral = -0.0748,
-  # b_dose2 = -0.046,
-  # b_dose3 = -0.0556,
-  b_imported = -0.292,
-  lambda_PT = 0.614
-)
-
-### Vector with names (in quotes) of parameters to be
-###  kept fixed at their starting value in apollo_beta.
-### Use apollo_beta_fixed = c() for no fixed parameters.
-
-apollo_fixed <- c() # no fixed parameters in our model
-
-# ####################################################### #
-#### 4. Input validation                               ####
-# ####################################################### #
-
-apollo_inputs = apollo_validateInputs()
-
-# ####################################################### #
-#### 5. Likelihood definition                          ####
-# ####################################################### #
-
-apollo_probabilities <- function(apollo_beta, apollo_inputs, functionality = "estimate"){
-  ### Attach inputs and detach after function exit
-  apollo_attach(apollo_beta, apollo_inputs)
-  on.exit(apollo_detach(apollo_beta, apollo_inputs))
-  
-  ### Create list of probabilities P
-  P <- list()
-  
-  V <- list()
-  
-  ### List of utilities: these must use the same names as
-  ### in nl_settings, order is irrelevant.
-  V[['alt1']] = asc + b_price*price.1 + b_risk2*risk2.1 + b_risk3*risk3.1 + b_duration2*duration2.1 + b_duration3*duration3.1 + b_efficacy2*efficacy2.1 + b_efficacy3*efficacy3.1 + b_oral*admin.1 + b_imported*origin.1
-  V[['alt2']] = asc + b_price*price.2 + b_risk2*risk2.2 + b_risk3*risk3.2 + b_duration2*duration2.2 + b_duration3*duration3.2 + b_efficacy2*efficacy2.2 + b_efficacy3*efficacy3.2 + b_oral*admin.2 + b_imported*origin.2
-  V[['alt3']] = 0
-  
-  ### Specify nests for NL model
-  nlNests = list(root=1, PT=lambda_PT)
-  
-  ### Specify tree structure for NL model
-  nlStructure= list()
-  nlStructure[["root"]]   = c("alt3","PT")
-  nlStructure[["PT"]]     = c("alt1","alt2")
-  
-  ### Define settings for MNL model component
-  nl_settings <- list(
-    alternatives = c(alt1 = 1, alt2 = 2, alt3 = 3),
-    avail        = list(alt1 = 1, alt2 = 1, alt3 = 1),
-    choiceVar    = choice,
-    V            = V,
-    nlNests      = nlNests,
-    nlStructure  = nlStructure
-  )
-  
-  ### Compute probabilities using MNL model
-  P[['model']] = apollo_nl(nl_settings, functionality)
-  
-  ### Take product across observation for same individual
-  P = apollo_panelProd(P, apollo_inputs, functionality)
-  
-  ### Using sampling weights in estimation and prediction
-  P = apollo_weighting(P, apollo_inputs, functionality)
-  
-  ### Prepare and return outputs of function
-  P = apollo_prepareProb(P, apollo_inputs, functionality)
-  
-  return(P)
-}
-
-# ####################################################### #
-#### 6. Model estimation                   ####
-# ####################################################### #
-fit <- apollo_estimate(apollo_beta, apollo_fixed, 
-                       apollo_probabilities, apollo_inputs)
-
-apollo_modelOutput(fit, list(printPVal = TRUE)) # LL(final) = -115570.4
-```
-
-Exclude admin
-
-```{r}
-# use apollo package to analyze
-# ####################################################### #
-#### 1. Definition of core settings                        
-# ####################################################### #
-### clear
-rm(list = ls())
-
-### Load library
-library(apollo)
-
-### Initialise code
-apollo_initialise()
-
-### Set core controls
-apollo_control <- list(
-  modelName = "Nested logit",
-  modelDescr = "Two-level NL model to determine Adults' preferences for a vaccine product",
-  indivID = "ID",
-  weights = "weight" # apply sample weights
-)
-# ####################################################### #
-#### 2. Data loading                                   ####
-# ####################################################### #
-database <- read.csv(file = "Data/database.csv")
-database <- subset(database, select = c("ID","price.1","risk2.1","risk3.1","duration2.1",
-                                     "duration3.1","efficacy2.1","efficacy3.1",
-                                     "admin.1","doses2.1","doses3.1","origin.1",
-                                     "price.2","risk2.2","risk3.2",
-                                     "duration2.2","duration3.2","efficacy2.2",
-                                     "efficacy3.2","admin.2","doses2.2",
-                                     "doses3.2","origin.2","choice","weight"))
-
-database <- as.data.frame(database)
-
-# ####################################################### #
-#### 3. Parameter definition                           ####
-# ####################################################### #
-
-### Vector of parameters, including any that are kept fixed 
-### during estimation
-
-apollo_beta <- c(
-  asc     = 2.14,
-  b_price  = -0.00055,
-  b_risk2  = -0.354,
-  b_risk3  = -0.327,
-  b_duration2  = 0.144,
-  b_duration3 = 0.651,
-  b_efficacy2 = 0.292,
-  b_efficacy3 = 0.62,
-  # b_oral = -0.0748,
-  b_dose2 = -0.046,
-  b_dose3 = -0.0556,
-  b_imported = -0.292,
-  lambda_PT = 0.614
-)
-
-### Vector with names (in quotes) of parameters to be
-###  kept fixed at their starting value in apollo_beta.
-### Use apollo_beta_fixed = c() for no fixed parameters.
-
-apollo_fixed <- c() # no fixed parameters in our model
-
-# ####################################################### #
-#### 4. Input validation                               ####
-# ####################################################### #
-
-apollo_inputs = apollo_validateInputs()
-
-# ####################################################### #
-#### 5. Likelihood definition                          ####
-# ####################################################### #
-
-apollo_probabilities <- function(apollo_beta, apollo_inputs, functionality = "estimate"){
-  ### Attach inputs and detach after function exit
-  apollo_attach(apollo_beta, apollo_inputs)
-  on.exit(apollo_detach(apollo_beta, apollo_inputs))
-  
-  ### Create list of probabilities P
-  P <- list()
-  
-  V <- list()
-  
-  ### List of utilities: these must use the same names as
-  ### in nl_settings, order is irrelevant.
-  V[['alt1']] = asc + b_price*price.1 + b_risk2*risk2.1 + b_risk3*risk3.1 + b_duration2*duration2.1 + b_duration3*duration3.1 + b_efficacy2*efficacy2.1 + b_efficacy3*efficacy3.1 + b_dose2*doses2.1 + b_dose3*doses3.1 + b_imported*origin.1
-  V[['alt2']] = asc + b_price*price.2 + b_risk2*risk2.2 + b_risk3*risk3.2 + b_duration2*duration2.2 + b_duration3*duration3.2 + b_efficacy2*efficacy2.2 + b_efficacy3*efficacy3.2 + b_dose2*doses2.2 + b_dose3*doses3.2 + b_imported*origin.2
-  V[['alt3']] = 0
-  
-  ### Specify nests for NL model
-  nlNests = list(root=1, PT=lambda_PT)
-  
-  ### Specify tree structure for NL model
-  nlStructure= list()
-  nlStructure[["root"]]   = c("alt3","PT")
-  nlStructure[["PT"]]     = c("alt1","alt2")
-  
-  ### Define settings for MNL model component
-  nl_settings <- list(
-    alternatives = c(alt1 = 1, alt2 = 2, alt3 = 3),
-    avail        = list(alt1 = 1, alt2 = 1, alt3 = 1),
-    choiceVar    = choice,
-    V            = V,
-    nlNests      = nlNests,
-    nlStructure  = nlStructure
-  )
-  
-  ### Compute probabilities using MNL model
-  P[['model']] = apollo_nl(nl_settings, functionality)
-  
-  ### Take product across observation for same individual
-  P = apollo_panelProd(P, apollo_inputs, functionality)
-  
-  ### Using sampling weights in estimation and prediction
-  P = apollo_weighting(P, apollo_inputs, functionality)
-  
-  ### Prepare and return outputs of function
-  P = apollo_prepareProb(P, apollo_inputs, functionality)
-  
-  return(P)
-}
-
-# ####################################################### #
-#### 6. Model estimation                   ####
-# ####################################################### #
-fit <- apollo_estimate(apollo_beta, apollo_fixed, 
-                       apollo_probabilities, apollo_inputs)
-
-apollo_modelOutput(fit, list(printPVal = TRUE)) # LL(final) = -114442.2
-```
-
-Exclude efficacy
-
-```{r}
-# use apollo package to analyze
-# ####################################################### #
-#### 1. Definition of core settings                        
-# ####################################################### #
-### clear
-rm(list = ls())
-
-### Load library
-library(apollo)
-
-### Initialise code
-apollo_initialise()
-
-### Set core controls
-apollo_control <- list(
-  modelName = "Nested logit",
-  modelDescr = "Two-level NL model to determine Adults' preferences for a vaccine product",
-  indivID = "ID",
-  weights = "weight" # apply sample weights
-)
-# ####################################################### #
-#### 2. Data loading                                   ####
-# ####################################################### #
-database <- read.csv(file = "Data/database.csv")
-database <- subset(database, select = c("ID","price.1","risk2.1","risk3.1","duration2.1",
-                                     "duration3.1","efficacy2.1","efficacy3.1",
-                                     "admin.1","doses2.1","doses3.1","origin.1",
-                                     "price.2","risk2.2","risk3.2",
-                                     "duration2.2","duration3.2","efficacy2.2",
-                                     "efficacy3.2","admin.2","doses2.2",
-                                     "doses3.2","origin.2","choice","weight"))
-
-database <- as.data.frame(database)
-
-# ####################################################### #
-#### 3. Parameter definition                           ####
-# ####################################################### #
-
-### Vector of parameters, including any that are kept fixed 
-### during estimation
-
-apollo_beta <- c(
-  asc     = 2.14,
-  b_price  = -0.00055,
-  b_risk2  = -0.354,
-  b_risk3  = -0.327,
-  b_duration2  = 0.144,
-  b_duration3 = 0.651,
-  # b_efficacy2 = 0.292,
-  # b_efficacy3 = 0.62,
-  b_oral = -0.0748,
-  b_dose2 = -0.046,
-  b_dose3 = -0.0556,
-  b_imported = -0.292,
-  lambda_PT = 0.614
-)
-
-### Vector with names (in quotes) of parameters to be
-###  kept fixed at their starting value in apollo_beta.
-### Use apollo_beta_fixed = c() for no fixed parameters.
-
-apollo_fixed <- c() # no fixed parameters in our model
-
-# ####################################################### #
-#### 4. Input validation                               ####
-# ####################################################### #
-
-apollo_inputs = apollo_validateInputs()
-
-# ####################################################### #
-#### 5. Likelihood definition                          ####
-# ####################################################### #
-
-apollo_probabilities <- function(apollo_beta, apollo_inputs, functionality = "estimate"){
-  ### Attach inputs and detach after function exit
-  apollo_attach(apollo_beta, apollo_inputs)
-  on.exit(apollo_detach(apollo_beta, apollo_inputs))
-  
-  ### Create list of probabilities P
-  P <- list()
-  
-  V <- list()
-  
-  ### List of utilities: these must use the same names as
-  ### in nl_settings, order is irrelevant.
-  V[['alt1']] = asc + b_price*price.1 + b_risk2*risk2.1 + b_risk3*risk3.1 + b_duration2*duration2.1 + b_duration3*duration3.1 + b_oral*admin.1 +  b_dose2*doses2.1 + b_dose3*doses3.1 + b_imported*origin.1
-  V[['alt2']] = asc + b_price*price.2 + b_risk2*risk2.2 + b_risk3*risk3.2 + b_duration2*duration2.2 + b_duration3*duration3.2 + b_oral*admin.2 +  b_dose2*doses2.2 + b_dose3*doses3.2 + b_imported*origin.2
-  V[['alt3']] = 0
-  
-  ### Specify nests for NL model
-  nlNests = list(root=1, PT=lambda_PT)
-  
-  ### Specify tree structure for NL model
-  nlStructure= list()
-  nlStructure[["root"]]   = c("alt3","PT")
-  nlStructure[["PT"]]     = c("alt1","alt2")
-  
-  ### Define settings for MNL model component
-  nl_settings <- list(
-    alternatives = c(alt1 = 1, alt2 = 2, alt3 = 3),
-    avail        = list(alt1 = 1, alt2 = 1, alt3 = 1),
-    choiceVar    = choice,
-    V            = V,
-    nlNests      = nlNests,
-    nlStructure  = nlStructure
-  )
-  
-  ### Compute probabilities using MNL model
-  P[['model']] = apollo_nl(nl_settings, functionality)
-  
-  ### Take product across observation for same individual
-  P = apollo_panelProd(P, apollo_inputs, functionality)
-  
-  ### Using sampling weights in estimation and prediction
-  P = apollo_weighting(P, apollo_inputs, functionality)
-  
-  ### Prepare and return outputs of function
-  P = apollo_prepareProb(P, apollo_inputs, functionality)
-  
-  return(P)
-}
-
-# ####################################################### #
-#### 6. Model estimation                   ####
-# ####################################################### #
-fit <- apollo_estimate(apollo_beta, apollo_fixed, 
-                       apollo_probabilities, apollo_inputs)
-
-apollo_modelOutput(fit, list(printPVal = TRUE)) # LL(final) = -119238.2
-```
-
-Exclude duration
-
-```{r}
-# use apollo package to analyze
-# ####################################################### #
-#### 1. Definition of core settings                        
-# ####################################################### #
-### clear
-rm(list = ls())
-
-### Load library
-library(apollo)
-
-### Initialise code
-apollo_initialise()
-
-### Set core controls
-apollo_control <- list(
-  modelName = "Nested logit",
-  modelDescr = "Two-level NL model to determine Adults' preferences for a vaccine product",
-  indivID = "ID",
-  weights = "weight" # apply sample weights
-)
-# ####################################################### #
-#### 2. Data loading                                   ####
-# ####################################################### #
-database <- read.csv(file = "Data/database.csv")
-database <- subset(database, select = c("ID","price.1","risk2.1","risk3.1","duration2.1",
-                                     "duration3.1","efficacy2.1","efficacy3.1",
-                                     "admin.1","doses2.1","doses3.1","origin.1",
-                                     "price.2","risk2.2","risk3.2",
-                                     "duration2.2","duration3.2","efficacy2.2",
-                                     "efficacy3.2","admin.2","doses2.2",
-                                     "doses3.2","origin.2","choice","weight"))
-
-database <- as.data.frame(database)
-
-# ####################################################### #
-#### 3. Parameter definition                           ####
-# ####################################################### #
-
-### Vector of parameters, including any that are kept fixed 
-### during estimation
-
-apollo_beta <- c(
-  asc     = 2.14,
-  b_price  = -0.00055,
-  b_risk2  = -0.354,
-  b_risk3  = -0.327,
-  # b_duration2  = 0.144,
-  # b_duration3 = 0.651,
-  b_efficacy2 = 0.292,
-  b_efficacy3 = 0.62,
-  b_oral = -0.0748,
-  b_dose2 = -0.046,
-  b_dose3 = -0.0556,
-  b_imported = -0.292,
-  lambda_PT = 0.614
-)
-
-### Vector with names (in quotes) of parameters to be
-###  kept fixed at their starting value in apollo_beta.
-### Use apollo_beta_fixed = c() for no fixed parameters.
-
-apollo_fixed <- c() # no fixed parameters in our model
-
-# ####################################################### #
-#### 4. Input validation                               ####
-# ####################################################### #
-
-apollo_inputs = apollo_validateInputs()
-
-# ####################################################### #
-#### 5. Likelihood definition                          ####
-# ####################################################### #
-
-apollo_probabilities <- function(apollo_beta, apollo_inputs, functionality = "estimate"){
-  ### Attach inputs and detach after function exit
-  apollo_attach(apollo_beta, apollo_inputs)
-  on.exit(apollo_detach(apollo_beta, apollo_inputs))
-  
-  ### Create list of probabilities P
-  P <- list()
-  
-  V <- list()
-  
-  ### List of utilities: these must use the same names as
-  ### in nl_settings, order is irrelevant.
-  V[['alt1']] = asc + b_price*price.1 + b_risk2*risk2.1 + b_risk3*risk3.1 + b_efficacy2*efficacy2.1 + b_efficacy3*efficacy3.1 + b_oral*admin.1 + b_dose2*doses2.1 + b_dose3*doses3.1 + b_imported*origin.1
-  V[['alt2']] = asc + b_price*price.2 + b_risk2*risk2.2 + b_risk3*risk3.2 + b_efficacy2*efficacy2.2 + b_efficacy3*efficacy3.2 + b_oral*admin.2 + b_dose2*doses2.2 + b_dose3*doses3.2 + b_imported*origin.2
-  V[['alt3']] = 0
-  
-  ### Specify nests for NL model
-  nlNests = list(root=1, PT=lambda_PT)
-  
-  ### Specify tree structure for NL model
-  nlStructure= list()
-  nlStructure[["root"]]   = c("alt3","PT")
-  nlStructure[["PT"]]     = c("alt1","alt2")
-  
-  ### Define settings for MNL model component
-  nl_settings <- list(
-    alternatives = c(alt1 = 1, alt2 = 2, alt3 = 3),
-    avail        = list(alt1 = 1, alt2 = 1, alt3 = 1),
-    choiceVar    = choice,
-    V            = V,
-    nlNests      = nlNests,
-    nlStructure  = nlStructure
-  )
-  
-  ### Compute probabilities using MNL model
-  P[['model']] = apollo_nl(nl_settings, functionality)
-  
-  ### Take product across observation for same individual
-  P = apollo_panelProd(P, apollo_inputs, functionality)
-  
-  ### Using sampling weights in estimation and prediction
-  P = apollo_weighting(P, apollo_inputs, functionality)
-  
-  ### Prepare and return outputs of function
-  P = apollo_prepareProb(P, apollo_inputs, functionality)
-  
-  return(P)
-}
-
-# ####################################################### #
-#### 6. Model estimation                   ####
-# ####################################################### #
-fit <- apollo_estimate(apollo_beta, apollo_fixed, 
-                       apollo_probabilities, apollo_inputs)
-
-apollo_modelOutput(fit, list(printPVal = TRUE))
-```
-
-Exclude risk
-
-```{r}
-# use apollo package to analyze
-# ####################################################### #
-#### 1. Definition of core settings                        
-# ####################################################### #
-### clear
-rm(list = ls())
-
-### Load library
-library(apollo)
-
-### Initialise code
-apollo_initialise()
-
-### Set core controls
-apollo_control <- list(
-  modelName = "Nested logit",
-  modelDescr = "Two-level NL model to determine Adults' preferences for a vaccine product",
-  indivID = "ID",
-  weights = "weight" # apply sample weights
-)
-# ####################################################### #
-#### 2. Data loading                                   ####
-# ####################################################### #
-database <- read.csv(file = "Data/database.csv")
-database <- subset(database, select = c("ID","price.1","risk2.1","risk3.1","duration2.1",
-                                     "duration3.1","efficacy2.1","efficacy3.1",
-                                     "admin.1","doses2.1","doses3.1","origin.1",
-                                     "price.2","risk2.2","risk3.2",
-                                     "duration2.2","duration3.2","efficacy2.2",
-                                     "efficacy3.2","admin.2","doses2.2",
-                                     "doses3.2","origin.2","choice","weight"))
-
-database <- as.data.frame(database)
-
-# ####################################################### #
-#### 3. Parameter definition                           ####
-# ####################################################### #
-
-### Vector of parameters, including any that are kept fixed 
-### during estimation
-
-apollo_beta <- c(
-  asc     = 2.14,
-  b_price  = -0.00055,
-  # b_risk2  = -0.354,
-  # b_risk3  = -0.327,
-  b_duration2  = 0.144,
-  b_duration3 = 0.651,
-  b_efficacy2 = 0.292,
-  b_efficacy3 = 0.62,
-  b_oral = -0.0748,
-  b_dose2 = -0.046,
-  b_dose3 = -0.0556,
-  b_imported = -0.292,
-  lambda_PT = 0.614
-)
-
-### Vector with names (in quotes) of parameters to be
-###  kept fixed at their starting value in apollo_beta.
-### Use apollo_beta_fixed = c() for no fixed parameters.
-
-apollo_fixed <- c() # no fixed parameters in our model
-
-# ####################################################### #
-#### 4. Input validation                               ####
-# ####################################################### #
-
-apollo_inputs = apollo_validateInputs()
-
-# ####################################################### #
-#### 5. Likelihood definition                          ####
-# ####################################################### #
-
-apollo_probabilities <- function(apollo_beta, apollo_inputs, functionality = "estimate"){
-  ### Attach inputs and detach after function exit
-  apollo_attach(apollo_beta, apollo_inputs)
-  on.exit(apollo_detach(apollo_beta, apollo_inputs))
-  
-  ### Create list of probabilities P
-  P <- list()
-  
-  V <- list()
-  
-  ### List of utilities: these must use the same names as
-  ### in nl_settings, order is irrelevant.
-  V[['alt1']] = asc + b_price*price.1 + b_duration2*duration2.1 + b_duration3*duration3.1 + b_efficacy2*efficacy2.1 + b_efficacy3*efficacy3.1 + b_oral*admin.1 + b_dose2*doses2.1 + b_dose3*doses3.1 + b_imported*origin.1
-  V[['alt2']] = asc + b_price*price.2 + b_duration2*duration2.2 + b_duration3*duration3.2 + b_efficacy2*efficacy2.2 + b_efficacy3*efficacy3.2 + b_oral*admin.2 + b_dose2*doses2.2 + b_dose3*doses3.2 + b_imported*origin.2
-  V[['alt3']] = 0
-  
-  ### Specify nests for NL model
-  nlNests = list(root=1, PT=lambda_PT)
-  
-  ### Specify tree structure for NL model
-  nlStructure= list()
-  nlStructure[["root"]]   = c("alt3","PT")
-  nlStructure[["PT"]]     = c("alt1","alt2")
-  
-  ### Define settings for MNL model component
-  nl_settings <- list(
-    alternatives = c(alt1 = 1, alt2 = 2, alt3 = 3),
-    avail        = list(alt1 = 1, alt2 = 1, alt3 = 1),
-    choiceVar    = choice,
-    V            = V,
-    nlNests      = nlNests,
-    nlStructure  = nlStructure
-  )
-  
-  ### Compute probabilities using MNL model
-  P[['model']] = apollo_nl(nl_settings, functionality)
-  
-  ### Take product across observation for same individual
-  P = apollo_panelProd(P, apollo_inputs, functionality)
-  
-  ### Using sampling weights in estimation and prediction
-  P = apollo_weighting(P, apollo_inputs, functionality)
-  
-  ### Prepare and return outputs of function
-  P = apollo_prepareProb(P, apollo_inputs, functionality)
-  
-  return(P)
-}
-
-# ####################################################### #
-#### 6. Model estimation                   ####
-# ####################################################### #
-fit <- apollo_estimate(apollo_beta, apollo_fixed, 
-                       apollo_probabilities, apollo_inputs)
-
-apollo_modelOutput(fit, list(printPVal = TRUE))
-```
-
-### 3.3 Respondents characteristic effect (expired)
-
-```{r}
-rm(list = ls())
-
-### Load library
-library(apollo)
-
-### Initialise code
-apollo_initialise()
-
-### Set core controls
-apollo_control <- list(
-  modelName = "Nested logit",
-  modelDescr = "Two-level NL model to determine Adults' preferences for a vaccine product (with sociodemographic characteristics)",
-  indivID = "ID",
-  ncores = 6
-)
-# ####################################################### #
-#### 2. Data loading                                   ####
-# ####################################################### #
-database <- read.csv(file = "Data/database.csv")
-socio_dat <- read.csv(file = "Data/socio_dat.csv")
-database <- database %>%
-  select(ID, price.1, risk2.1, risk3.1, duration2.1, duration3.1, efficacy2.1, 
-         efficacy3.1, admin.1, doses2.1, doses3.1, origin.1, price.2, risk2.2, 
-         risk3.2, duration2.2, duration3.2, efficacy2.2, efficacy3.2, admin.2, 
-         doses2.2, doses3.2, origin.2, choice) %>%
-  left_join(socio_dat, by = "ID")
-
-# ####################################################### #
-#### 3. Parameter definition                           ####
-# ####################################################### #
-
-### Vector of parameters, including any that are kept fixed 
-### during estimation
-
-apollo_beta <- c(
-  asc     = 2.14,
-  b_price  = -0.00055,
-  b_risk2  = -0.354,
-  b_risk3  = -0.327,
-  b_duration2  = 0.144,
-  b_duration3 = 0.651,
-  b_efficacy2 = 0.292,
-  b_efficacy3 = 0.62,
-  b_oral = -0.0748,
-  b_dose2 = -0.046,
-  b_dose3 = -0.0556,
-  b_imported = -0.292,
-  b_gender_2l = 0,
-  b_age_high = 0,
-  b_age_mid = 0,
-  b_education_high = 0,
-  b_education_mid = 0,
-  b_marriage_2l = 0,
-  b_residence_2l = 0,
-  b_occupation_high = 0,
-  b_occupation_mid = 0,
-  b_insurance_2l = 0,
-  b_income_high = 0,
-  b_income_mid = 0,
-  b_chronic_2l = 0,
-  b_hasvaccined_2l = 0,
-  b_depression_2l = 0,
-  b_Hebei1 = 0,
-  b_Shanxi2 = 0, 
-  b_Liaoning3 = 0,
-  b_Jilin4 = 0,
-  b_Heilongjiang5 = 0,
-  b_Jiangsu6 = 0,
-  b_Zhejiang7 = 0,
-  b_Anhui8 = 0,
-  b_Fujian9 = 0,
-  b_Jiangxi10 = 0,
-  b_Shandong11 = 0,
-  b_Henan12 = 0,
-  b_Hubei13 = 0,
-  b_Hunan14 = 0,
-  b_Guangdong15 = 0,
-  b_Hainan16 = 0,
-  b_Sichuan17 = 0,
-  b_Guizhou18 = 0,
-  b_Yunnan19 = 0,
-  b_Shaanxi20 = 0,
-  b_Gansu21 = 0,
-  b_Qinghai22 = 0,
-  b_Neimongol23 = 0,
-  b_Guangxi24 = 0,
-  b_Tibet25 = 0,
-  b_Ningxia26 = 0,
-  b_Xinjiang27 = 0,
-  b_Beijing28 = 0,
-  b_Shanghai29 = 0,
-  b_Tianjin30 = 0,
-  lambda_PT = 0.614
-)
-
-### Vector with names (in quotes) of parameters to be
-###  kept fixed at their starting value in apollo_beta.
-### Use apollo_beta_fixed = c() for no fixed parameters.
-
-apollo_fixed <- c() # no fixed parameters in our model
-
-# ####################################################### #
-#### 4. Input validation                               ####
-# ####################################################### #
-
-apollo_inputs = apollo_validateInputs()
-
-# ####################################################### #
-#### 5. Likelihood definition                          ####
-# ####################################################### #
-
-apollo_probabilities <- function(apollo_beta, apollo_inputs, functionality = "estimate"){
-  ### Attach inputs and detach after function exit
-  apollo_attach(apollo_beta, apollo_inputs)
-  on.exit(apollo_detach(apollo_beta, apollo_inputs))
-  
-  ### Create list of probabilities P
-  P <- list()
-  
-  ### Effect codings constraint
-  b_Chongqing31 = -b_Hebei1-b_Shanxi2-b_Liaoning3-b_Jilin4-b_Heilongjiang5-b_Jiangsu6-b_Zhejiang7-b_Anhui8-b_Fujian9-b_Jiangxi10-b_Shandong11-b_Henan12-b_Hubei13-b_Hunan14-b_Guangdong15-b_Hainan16-b_Sichuan17-b_Guizhou18-b_Yunnan19-b_Shaanxi20-b_Gansu21-b_Qinghai22-b_Neimongol23-b_Guangxi24-b_Tibet25-b_Ningxia26-b_Xinjiang27-b_Beijing28-b_Shanghai29-b_Tianjin30
-  
-  V <- list()
-  
-  ### List of utilities: these must use the same names as
-  ### in nl_settings, order is irrelevant.
-  V[['alt1']] = asc + b_price*price.1 + b_risk2*risk2.1 + b_risk3*risk3.1 + 
-    b_duration2*duration2.1 + b_duration3*duration3.1 + b_efficacy2*efficacy2.1 + 
-    b_efficacy3*efficacy3.1 + b_oral*admin.1 + b_dose2*doses2.1 + 
-    b_dose3*doses3.1 + b_imported*origin.1 + # behigh are respondent characterisitics
-    b_gender_2l*gender_2l + b_age_high*age_high + b_age_mid*age_mid + 
-    b_education_high*education_high + b_education_mid*education_mid + 
-    b_marriage_2l*marriage_2l + b_residence_2l*residence_2l + 
-    b_occupation_high*occupation_high + b_occupation_mid*occupation_mid + 
-    b_insurance_2l*insurance_2l + b_income_high*income_high + 
-    b_income_mid*income_mid + b_chronic_2l*chronic_2l + 
-    b_hasvaccined_2l*hasvaccined_2l + b_depression_2l*depression_2l+ 
-    b_Hebei1*(province_31l == 1) + b_Shanxi2*(province_31l == 2) + 
-    b_Liaoning3 *(province_31l == 3) + b_Jilin4*(province_31l == 4) + 
-    b_Heilongjiang5*(province_31l == 5) + b_Jiangsu6*(province_31l == 6) + 
-    b_Zhejiang7*(province_31l == 7) + b_Anhui8*(province_31l == 8) + 
-    b_Fujian9*(province_31l == 9) + b_Jiangxi10*(province_31l == 10) + 
-    b_Shandong11*(province_31l == 11) + b_Henan12*(province_31l == 12) + 
-    b_Hubei13*(province_31l == 13) + b_Hunan14*(province_31l == 14) + 
-    b_Guangdong15*(province_31l == 15) + b_Hainan16*(province_31l == 16) + 
-    b_Sichuan17*(province_31l == 17) + b_Guizhou18*(province_31l == 18) + 
-    b_Yunnan19*(province_31l == 19) + b_Shaanxi20*(province_31l == 20) + 
-    b_Gansu21*(province_31l == 21) + b_Qinghai22*(province_31l == 22) + 
-    b_Neimongol23*(province_31l == 23) + b_Guangxi24*(province_31l == 24) + 
-    b_Tibet25*(province_31l == 25) + b_Ningxia26*(province_31l == 26) + 
-    b_Xinjiang27*(province_31l == 27) + b_Beijing28*(province_31l == 28) + 
-    b_Shanghai29*(province_31l == 29) + b_Tianjin30*(province_31l == 30) + 
-    b_Chongqing31*(province_31l == 31)
-  V[['alt2']] = asc + b_price*price.2 + b_risk2*risk2.2 + b_risk3*risk3.2 + 
-    b_duration2*duration2.2 + b_duration3*duration3.2 + b_efficacy2*efficacy2.2 + 
-    b_efficacy3*efficacy3.2 + b_oral*admin.2 + b_dose2*doses2.2 + 
-    b_dose3*doses3.2 + b_imported*origin.2 # behigh are respondent characterisitics
-    b_gender_2l*gender_2l + b_age_high*age_high + b_age_mid*age_mid + 
-    b_education_high*education_high + b_education_mid*education_mid + 
-    b_marriage_2l*marriage_2l + b_residence_2l*residence_2l + 
-    b_occupation_high*occupation_high + b_occupation_mid*occupation_mid + 
-    b_insurance_2l*insurance_2l + b_income_high*income_high + 
-    b_income_mid*income_mid + b_chronic_2l*chronic_2l + 
-    b_hasvaccined_2l*hasvaccined_2l + b_depression_2l*depression_2l+ 
-    b_Hebei1*(province_31l == 1) + b_Shanxi2*(province_31l == 2) + 
-    b_Liaoning3 *(province_31l == 3) + b_Jilin4*(province_31l == 4) + 
-    b_Heilongjiang5*(province_31l == 5) + b_Jiangsu6*(province_31l == 6) + 
-    b_Zhejiang7*(province_31l == 7) + b_Anhui8*(province_31l == 8) + 
-    b_Fujian9*(province_31l == 9) + b_Jiangxi10*(province_31l == 10) + 
-    b_Shandong11*(province_31l == 11) + b_Henan12*(province_31l == 12) + 
-    b_Hubei13*(province_31l == 13) + b_Hunan14*(province_31l == 14) + 
-    b_Guangdong15*(province_31l == 15) + b_Hainan16*(province_31l == 16) + 
-    b_Sichuan17*(province_31l == 17) + b_Guizhou18*(province_31l == 18) + 
-    b_Yunnan19*(province_31l == 19) + b_Shaanxi20*(province_31l == 20) + 
-    b_Gansu21*(province_31l == 21) + b_Qinghai22*(province_31l == 22) + 
-    b_Neimongol23*(province_31l == 23) + b_Guangxi24*(province_31l == 24) + 
-    b_Tibet25*(province_31l == 25) + b_Ningxia26*(province_31l == 26) + 
-    b_Xinjiang27*(province_31l == 27) + b_Beijing28*(province_31l == 28) + 
-    b_Shanghai29*(province_31l == 29) + b_Tianjin30*(province_31l == 30) + 
-    b_Chongqing31*(province_31l == 31)
-  V[['alt3']] = 0
-  
-  ### Specify nests for NL model
-  nlNests = list(root=1, PT=lambda_PT)
-  
-  ### Specify tree structure for NL model
-  nlStructure= list()
-  nlStructure[["root"]]   = c("alt3","PT")
-  nlStructure[["PT"]]     = c("alt1","alt2")
-  
-  ### Define settings for MNL model component
-  nl_settings <- list(
-    alternatives = c(alt1 = 1, alt2 = 2, alt3 = 3),
-    avail        = list(alt1 = 1, alt2 = 1, alt3 = 1),
-    choiceVar    = choice,
-    V            = V,
-    nlNests      = nlNests,
-    nlStructure  = nlStructure
-  )
-  
-  ### Compute probabilities using MNL model
-  P[['model']] = apollo_nl(nl_settings, functionality)
-  
-  ### Take product across observation for same individual
-  P = apollo_panelProd(P, apollo_inputs, functionality)
-  
-  ### Using sampling weights in estimation and prediction
-#  P = apollo_weighting(P, apollo_inputs, functionality)
-  
-  ### Prepare and return outputs of function
-  P = apollo_prepareProb(P, apollo_inputs, functionality)
-  
-  return(P)
-}
-
-# ####################################################### #
-#### 6. Model estimation                   ####
-# ####################################################### #
-fit <- apollo_estimate(apollo_beta, apollo_fixed, 
-                       apollo_probabilities, apollo_inputs)
-
-save(fit, FormatResult, file = "Model/NL_socio_characters.RData")
-# apollo_modelOutput(fit, list(printPVal = TRUE))
-
-```
-
-
-```{r}
-# ####################################################### #
-#### 7. Report the results                 ####
-# ####################################################### #
-
-#### province effect
-
-# load(file = "Model/NL_interaction.RData")
-# result_dat <- FormatResult(fit)
-WTP_Chongqing31 <- deltaMethod(fit, "(b_Hebei1+b_Shanxi2+b_Liaoning3+b_Jilin4+b_Heilongjiang5+b_Jiangsu6+b_Zhejiang7+b_Anhui8+b_Fujian9+b_Jiangxi10+b_Shandong11+b_Henan12+b_Hubei13+b_Hunan14+b_Guangdong15+b_Hainan16+b_Sichuan17+b_Guizhou18+b_Yunnan19+b_Shaanxi20+b_Gansu21+b_Qinghai22+b_Neimongol23+b_Guangxi24+b_Tibet25+b_Ningxia26+b_Xinjiang27+b_Beijing28+b_Shanghai29+b_Tianjin30)/b_price", func = "WTP_Chongqing31", vcov. = fit$robvarcov)
-
-b_Chongqing31 <- deltaMethod(fit, "-(b_Hebei1+b_Shanxi2+b_Liaoning3+b_Jilin4+b_Heilongjiang5+b_Jiangsu6+b_Zhejiang7+b_Anhui8+b_Fujian9+b_Jiangxi10+b_Shandong11+b_Henan12+b_Hubei13+b_Hunan14+b_Guangdong15+b_Hainan16+b_Sichuan17+b_Guizhou18+b_Yunnan19+b_Shaanxi20+b_Gansu21+b_Qinghai22+b_Neimongol23+b_Guangxi24+b_Tibet25+b_Ningxia26+b_Xinjiang27+b_Beijing28+b_Shanghai29+b_Tianjin30)", func = "b_Chongqing31", vcov. = fit$robvarcov)
-
-b_Chongqing31 <- b_Chongqing31 %>%
-  select(Estimate, `2.5 %`, `97.5 %`) %>%
-  rename(
-    `2.5%` = `2.5 %`,
-    `97.5%` = `97.5 %`
-  ) %>%
-  mutate(
-    WTP = WTP_Chongqing31$Estimate,
-    p_value = ifelse(
-      as.numeric(b_Chongqing31[1]/b_Chongqing31[2])>0,
-      2*(1-pt(as.numeric(b_Chongqing31[1]/b_Chongqing31[2]),df = 143998)),
-      2*pt(as.numeric(b_Chongqing31[1]/b_Chongqing31[2]),df = 143998)
-    ),
-    WTP_p_value = ifelse(
-      as.numeric(WTP_Chongqing31[1]/WTP_Chongqing31[2])>0,
-      2*(1-pt(as.numeric(WTP_Chongqing31[1]/WTP_Chongqing31[2]),df = 143998)),
-      2*pt(as.numeric(WTP_Chongqing31[1]/WTP_Chongqing31[2]),df = 143998)
-    )
-  )
-
-province_dat <- rbind(result_dat[28:57, ], b_Chongqing31)
-
-write.csv(province_dat,file = "Result/NL_extended_province.csv")
-```
-
-
-## 4. Interaction effect
-
-```{r}
-# ####################################################### #
-#### 1. Definition of core settings
-# ####################################################### #
-### clear
-rm(list = ls())
-
-### Load library
-library(apollo)
-
-### Initialise code
-apollo_initialise()
-
-### Set core controls
-apollo_control <- list(
-  modelName = "NL",
-  modelDescr = "Adults' preferences for a vaccine product",
-  indivID = "ID",
-  ncores = 6
-  #  ,weights = "weight" # apply sample weights
-)
-# ####################################################### #
-#### 2. Data loading                                   ####
-# ####################################################### #
-database <- read.csv(file = "Data\database.csv")
-socio_dat <- read.csv(file = "Data\socio_dat.csv")
-database <- database %>%
-  select(ID, price.1, risk2.1, risk3.1, duration2.1, duration3.1, efficacy2.1, efficacy3.1, admin.1, doses2.1, doses3.1, origin.1, price.2, risk2.2, risk3.2, duration2.2, duration3.2, efficacy2.2, efficacy3.2, admin.2, doses2.2, doses3.2, origin.2, choice) %>%
-  left_join(socio_dat, by = "ID")
-
-# ####################################################### #
-#### 3. Parameter definition                           ####
-# ####################################################### #
-
-### Vector of parameters, including any that are kept fixed
-### during estimation
-
-apollo_beta <- c(
-  asc     = 2.14,
-  b_price  = -0.00055,
-  b_risk2  = -0.354,
-  b_risk3  = -0.327,
-  b_duration2  = 0.144,
-  b_duration3 = 0.651,
-  b_efficacy2 = 0.292,
-  b_efficacy3 = 0.62,
-  b_oral = -0.0748,
-  b_dose2 = -0.046,
-  b_dose3 = -0.0556,
-  b_imported = -0.292,
-  b_gender_2l = 0,
-  b_age_high = 0,
-  b_age_mid = 0,
-  b_education_high = 0,
-  b_education_mid = 0,
-  b_marriage_2l = 0,
-  b_residence_2l = 0,
-  b_occupation_high = 0,
-  b_occupation_mid = 0,
-  b_insurance_2l = 0,
-  b_income_high = 0,
-  b_income_mid = 0,
-  b_chronic_2l = 0,
-  b_hasvaccined_2l = 0,
-  b_depression_2l = 0,
-    b_Hebei1 = 0,
-  b_Shanxi2 = 0, 
-  b_Liaoning3 = 0,
-  b_Jilin4 = 0,
-  b_Heilongjiang5 = 0,
-  b_Jiangsu6 = 0,
-  b_Zhejiang7 = 0,
-  b_Anhui8 = 0,
-  b_Fujian9 = 0,
-  b_Jiangxi10 = 0,
-  b_Shandong11 = 0,
-  b_Henan12 = 0,
-  b_Hubei13 = 0,
-  b_Hunan14 = 0,
-  b_Guangdong15 = 0,
-  b_Hainan16 = 0,
-  b_Sichuan17 = 0,
-  b_Guizhou18 = 0,
-  b_Yunnan19 = 0,
-  b_Shaanxi20 = 0,
-  b_Gansu21 = 0,
-  b_Qinghai22 = 0,
-  b_Neimongol23 = 0,
-  b_Guangxi24 = 0,
-  b_Tibet25 = 0,
-  b_Ningxia26 = 0,
-  b_Xinjiang27 = 0,
-  b_Beijing28 = 0,
-  b_Shanghai29 = 0,
-  b_Tianjin30 = 0,
-    b_price_gender_2l = 0,
-  b_risk2_gender_2l = 0,
-  b_risk3_gender_2l = 0,
-  b_duration2_gender_2l = 0,
-  b_duration3_gender_2l = 0,
-  b_efficacy2_gender_2l = 0,
-  b_efficacy3_gender_2l = 0,
-  b_oral_gender_2l = 0,
-  b_dose2_gender_2l = 0,
-  b_dose3_gender_2l = 0,
-  b_imported_gender_2l = 0,
-    b_price_age_high = 0,
-  b_risk2_age_high = 0,
-  b_risk3_age_high = 0,
-  b_duration2_age_high = 0,
-  b_duration3_age_high = 0,
-  b_efficacy2_age_high = 0,
-  b_efficacy3_age_high = 0,
-  b_oral_age_high = 0,
-  b_dose2_age_high = 0,
-  b_dose3_age_high = 0,
-  b_imported_age_high = 0,
-    b_price_age_mid = 0,
-  b_risk2_age_mid = 0,
-  b_risk3_age_mid = 0,
-  b_duration2_age_mid = 0,
-  b_duration3_age_mid = 0,
-  b_efficacy2_age_mid = 0,
-  b_efficacy3_age_mid = 0,
-  b_oral_age_mid = 0,
-  b_dose2_age_mid = 0,
-  b_dose3_age_mid = 0,
-  b_imported_age_mid = 0,
-    b_price_education_high = 0,
-  b_risk2_education_high = 0,
-  b_risk3_education_high = 0,
-  b_duration2_education_high = 0,
-  b_duration3_education_high = 0,
-  b_efficacy2_education_high = 0,
-  b_efficacy3_education_high = 0,
-  b_oral_education_high = 0,
-  b_dose2_education_high = 0,
-  b_dose3_education_high = 0,
-  b_imported_education_high = 0,
-    b_price_education_mid = 0,
-  b_risk2_education_mid = 0,
-  b_risk3_education_mid = 0,
-  b_duration2_education_mid = 0,
-  b_duration3_education_mid = 0,
-  b_efficacy2_education_mid = 0,
-  b_efficacy3_education_mid = 0,
-  b_oral_education_mid = 0,
-  b_dose2_education_mid = 0,
-  b_dose3_education_mid = 0,
-  b_imported_education_mid = 0,
-    b_price_marriage_2l = 0,
-  b_risk2_marriage_2l = 0,
-  b_risk3_marriage_2l = 0,
-  b_duration2_marriage_2l = 0,
-  b_duration3_marriage_2l = 0,
-  b_efficacy2_marriage_2l = 0,
-  b_efficacy3_marriage_2l = 0,
-  b_oral_marriage_2l = 0,
-  b_dose2_marriage_2l = 0,
-  b_dose3_marriage_2l = 0,
-  b_imported_marriage_2l = 0,
-    b_price_residence_2l = 0,
-  b_risk2_residence_2l = 0,
-  b_risk3_residence_2l = 0,
-  b_duration2_residence_2l = 0,
-  b_duration3_residence_2l = 0,
-  b_efficacy2_residence_2l = 0,
-  b_efficacy3_residence_2l = 0,
-  b_oral_residence_2l = 0,
-  b_dose2_residence_2l = 0,
-  b_dose3_residence_2l = 0,
-  b_imported_residence_2l = 0,
-    b_price_occupation_high = 0,
-  b_risk2_occupation_high = 0,
-  b_risk3_occupation_high = 0,
-  b_duration2_occupation_high = 0,
-  b_duration3_occupation_high = 0,
-  b_efficacy2_occupation_high = 0,
-  b_efficacy3_occupation_high = 0,
-  b_oral_occupation_high = 0,
-  b_dose2_occupation_high = 0,
-  b_dose3_occupation_high = 0,
-  b_imported_occupation_high = 0,
-    b_price_occupation_mid = 0,
-  b_risk2_occupation_mid = 0,
-  b_risk3_occupation_mid = 0,
-  b_duration2_occupation_mid = 0,
-  b_duration3_occupation_mid = 0,
-  b_efficacy2_occupation_mid = 0,
-  b_efficacy3_occupation_mid = 0,
-  b_oral_occupation_mid = 0,
-  b_dose2_occupation_mid = 0,
-  b_dose3_occupation_mid = 0,
-  b_imported_occupation_mid = 0,
-    b_price_insurance_2l = 0,
-  b_risk2_insurance_2l = 0,
-  b_risk3_insurance_2l = 0,
-  b_duration2_insurance_2l = 0,
-  b_duration3_insurance_2l = 0,
-  b_efficacy2_insurance_2l = 0,
-  b_efficacy3_insurance_2l = 0,
-  b_oral_insurance_2l = 0,
-  b_dose2_insurance_2l = 0,
-  b_dose3_insurance_2l = 0,
-  b_imported_insurance_2l = 0,
-    b_price_income_high = 0,
-  b_risk2_income_high = 0,
-  b_risk3_income_high = 0,
-  b_duration2_income_high = 0,
-  b_duration3_income_high = 0,
-  b_efficacy2_income_high = 0,
-  b_efficacy3_income_high = 0,
-  b_oral_income_high = 0,
-  b_dose2_income_high = 0,
-  b_dose3_income_high = 0,
-  b_imported_income_high = 0,
-    b_price_income_mid = 0,
-  b_risk2_income_mid = 0,
-  b_risk3_income_mid = 0,
-  b_duration2_income_mid = 0,
-  b_duration3_income_mid = 0,
-  b_efficacy2_income_mid = 0,
-  b_efficacy3_income_mid = 0,
-  b_oral_income_mid = 0,
-  b_dose2_income_mid = 0,
-  b_dose3_income_mid = 0,
-  b_imported_income_mid = 0,
-    b_price_chronic_2l = 0,
-  b_risk2_chronic_2l = 0,
-  b_risk3_chronic_2l = 0,
-  b_duration2_chronic_2l = 0,
-  b_duration3_chronic_2l = 0,
-  b_efficacy2_chronic_2l = 0,
-  b_efficacy3_chronic_2l = 0,
-  b_oral_chronic_2l = 0,
-  b_dose2_chronic_2l = 0,
-  b_dose3_chronic_2l = 0,
-  b_imported_chronic_2l = 0,
-    b_price_hasvaccined_2l = 0,
-  b_risk2_hasvaccined_2l = 0,
-  b_risk3_hasvaccined_2l = 0,
-  b_duration2_hasvaccined_2l = 0,
-  b_duration3_hasvaccined_2l = 0,
-  b_efficacy2_hasvaccined_2l = 0,
-  b_efficacy3_hasvaccined_2l = 0,
-  b_oral_hasvaccined_2l = 0,
-  b_dose2_hasvaccined_2l = 0,
-  b_dose3_hasvaccined_2l = 0,
-  b_imported_hasvaccined_2l = 0,
-    b_price_depression_2l = 0,
-  b_risk2_depression_2l = 0,
-  b_risk3_depression_2l = 0,
-  b_duration2_depression_2l = 0,
-  b_duration3_depression_2l = 0,
-  b_efficacy2_depression_2l = 0,
-  b_efficacy3_depression_2l = 0,
-  b_oral_depression_2l = 0,
-  b_dose2_depression_2l = 0,
-  b_dose3_depression_2l = 0,
-  b_imported_depression_2l = 0,
-  lambda_PT = 0.614
-)
-
-### Vector with names (in quotes) of parameters to be
-###  kept fixed at their starting value in apollo_beta.
-### Use apollo_beta_fixed = c() for no fixed parameters.
-
-apollo_fixed <- c() # no fixed parameters in our model
-
-# ####################################################### #
-#### 4. Input validation                               ####
-# ####################################################### #
-
-apollo_inputs <- apollo_validateInputs()
-
-# ####################################################### #
-#### 5. Likelihood definition                          ####
-# ####################################################### #
-
-apollo_probabilities <- function(apollo_beta, apollo_inputs, functionality = "estimate") {
-  ### Attach inputs and detach after function exit
-  apollo_attach(apollo_beta, apollo_inputs)
-  on.exit(apollo_detach(apollo_beta, apollo_inputs))
-
-  ### Create list of probabilities P
-  P <- list()
-
-  ### Effect codings constraint
-  b_Chongqing31 = -b_Hebei1-b_Shanxi2-b_Liaoning3-b_Jilin4-b_Heilongjiang5-b_Jiangsu6-b_Zhejiang7-b_Anhui8-b_Fujian9-b_Jiangxi10-b_Shandong11-b_Henan12-b_Hubei13-b_Hunan14-b_Guangdong15-b_Hainan16-b_Sichuan17-b_Guizhou18-b_Yunnan19-b_Shaanxi20-b_Gansu21-b_Qinghai22-b_Neimongol23-b_Guangxi24-b_Tibet25-b_Ningxia26-b_Xinjiang27-b_Beijing28-b_Shanghai29-b_Tianjin30
-  
-  V <- list()
-
-  ### List of utilities: these must use the same names as
-  ### in nl_settings, order is irrelevant. 
-  V[["alt1"]] <- asc + b_price * price.1 + b_risk2 * risk2.1 + b_risk3 * risk3.1 +
-    b_duration2 * duration2.1 + b_duration3 * duration3.1 + b_efficacy2 * efficacy2.1 +
-    b_efficacy3 * efficacy3.1 + b_oral * admin.1 + b_dose2 * doses2.1 +
-    b_dose3*doses3.1 + b_imported*origin.1 + # below are respondents characteristics
-    b_gender_2l*gender_2l + b_age_high*age_high + b_age_mid*age_mid + 
-    b_education_high*education_high + b_education_mid*education_mid + 
-    b_marriage_2l*marriage_2l + b_residence_2l*residence_2l + 
-    b_occupation_high*occupation_high + b_occupation_mid*occupation_mid + 
-    b_insurance_2l*insurance_2l + b_income_high*income_high + 
-    b_income_mid*income_mid + b_chronic_2l*chronic_2l + 
-    b_hasvaccined_2l*hasvaccined_2l + b_depression_2l*depression_2l + # geographic
-    b_Hebei1*(province_31l == 1) + b_Shanxi2*(province_31l == 2) + 
-    b_Liaoning3 *(province_31l == 3) + b_Jilin4*(province_31l == 4) + 
-    b_Heilongjiang5*(province_31l == 5) + b_Jiangsu6*(province_31l == 6) + 
-    b_Zhejiang7*(province_31l == 7) + b_Anhui8*(province_31l == 8) + 
-    b_Fujian9*(province_31l == 9) + b_Jiangxi10*(province_31l == 10) + 
-    b_Shandong11*(province_31l == 11) + b_Henan12*(province_31l == 12) + 
-    b_Hubei13*(province_31l == 13) + b_Hunan14*(province_31l == 14) + 
-    b_Guangdong15*(province_31l == 15) + b_Hainan16*(province_31l == 16) + 
-    b_Sichuan17*(province_31l == 17) + b_Guizhou18*(province_31l == 18) + 
-    b_Yunnan19*(province_31l == 19) + b_Shaanxi20*(province_31l == 20) + 
-    b_Gansu21*(province_31l == 21) + b_Qinghai22*(province_31l == 22) + 
-    b_Neimongol23*(province_31l == 23) + b_Guangxi24*(province_31l == 24) + 
-    b_Tibet25*(province_31l == 25) + b_Ningxia26*(province_31l == 26) + 
-    b_Xinjiang27*(province_31l == 27) + b_Beijing28*(province_31l == 28) + 
-    b_Shanghai29*(province_31l == 29) + b_Tianjin30*(province_31l == 30) + 
-    b_Chongqing31*(province_31l == 31) + # below are interaction terms
-      b_price_gender_2l * price.1 * gender_2l +
-    b_risk2_gender_2l * risk2.1 * gender_2l +
-    b_risk3_gender_2l * risk3.1 * gender_2l +
-    b_duration2_gender_2l * duration2.1 * gender_2l +
-    b_duration3_gender_2l * duration3.1 * gender_2l +
-    b_efficacy2_gender_2l * efficacy2.1 * gender_2l +
-    b_efficacy3_gender_2l * efficacy3.1 * gender_2l +
-    b_oral_gender_2l * admin.1 * gender_2l +
-    b_dose2_gender_2l * doses2.1 * gender_2l +
-    b_dose3_gender_2l * doses3.1 * gender_2l +
-    b_imported_gender_2l * origin.1 * gender_2l +
-      b_price_age_high * price.1 * age_high +
-    b_risk2_age_high * risk2.1 * age_high +
-    b_risk3_age_high * risk3.1 * age_high +
-    b_duration2_age_high * duration2.1 * age_high +
-    b_duration3_age_high * duration3.1 * age_high +
-    b_efficacy2_age_high * efficacy2.1 * age_high +
-    b_efficacy3_age_high * efficacy3.1 * age_high +
-    b_oral_age_high * admin.1 * age_high +
-    b_dose2_age_high * doses2.1 * age_high +
-    b_dose3_age_high * doses3.1 * age_high +
-    b_imported_age_high * origin.1 * age_high +
-      b_price_age_mid * price.1 * age_mid +
-    b_risk2_age_mid * risk2.1 * age_mid +
-    b_risk3_age_mid * risk3.1 * age_mid +
-    b_duration2_age_mid * duration2.1 * age_mid +
-    b_duration3_age_mid * duration3.1 * age_mid +
-    b_efficacy2_age_mid * efficacy2.1 * age_mid +
-    b_efficacy3_age_mid * efficacy3.1 * age_mid +
-    b_oral_age_mid * admin.1 * age_mid +
-    b_dose2_age_mid * doses2.1 * age_mid +
-    b_dose3_age_mid * doses3.1 * age_mid +
-    b_imported_age_mid * origin.1 * age_mid +
-      b_price_education_high * price.1 * education_high +
-    b_risk2_education_high * risk2.1 * education_high +
-    b_risk3_education_high * risk3.1 * education_high +
-    b_duration2_education_high * duration2.1 * education_high +
-    b_duration3_education_high * duration3.1 * education_high +
-    b_efficacy2_education_high * efficacy2.1 * education_high +
-    b_efficacy3_education_high * efficacy3.1 * education_high +
-    b_oral_education_high * admin.1 * education_high +
-    b_dose2_education_high * doses2.1 * education_high +
-    b_dose3_education_high * doses3.1 * education_high +
-    b_imported_education_high * origin.1 * education_high +
-      b_price_education_mid * price.1 * education_mid +
-    b_risk2_education_mid * risk2.1 * education_mid +
-    b_risk3_education_mid * risk3.1 * education_mid +
-    b_duration2_education_mid * duration2.1 * education_mid +
-    b_duration3_education_mid * duration3.1 * education_mid +
-    b_efficacy2_education_mid * efficacy2.1 * education_mid +
-    b_efficacy3_education_mid * efficacy3.1 * education_mid +
-    b_oral_education_mid * admin.1 * education_mid +
-    b_dose2_education_mid * doses2.1 * education_mid +
-    b_dose3_education_mid * doses3.1 * education_mid +
-    b_imported_education_mid * origin.1 * education_mid +
-      b_price_marriage_2l * price.1 * marriage_2l +
-    b_risk2_marriage_2l * risk2.1 * marriage_2l +
-    b_risk3_marriage_2l * risk3.1 * marriage_2l +
-    b_duration2_marriage_2l * duration2.1 * marriage_2l +
-    b_duration3_marriage_2l * duration3.1 * marriage_2l +
-    b_efficacy2_marriage_2l * efficacy2.1 * marriage_2l +
-    b_efficacy3_marriage_2l * efficacy3.1 * marriage_2l +
-    b_oral_marriage_2l * admin.1 * marriage_2l +
-    b_dose2_marriage_2l * doses2.1 * marriage_2l +
-    b_dose3_marriage_2l * doses3.1 * marriage_2l +
-    b_imported_marriage_2l * origin.1 * marriage_2l +
-      b_price_residence_2l * price.1 * residence_2l +
-    b_risk2_residence_2l * risk2.1 * residence_2l +
-    b_risk3_residence_2l * risk3.1 * residence_2l +
-    b_duration2_residence_2l * duration2.1 * residence_2l +
-    b_duration3_residence_2l * duration3.1 * residence_2l +
-    b_efficacy2_residence_2l * efficacy2.1 * residence_2l +
-    b_efficacy3_residence_2l * efficacy3.1 * residence_2l +
-    b_oral_residence_2l * admin.1 * residence_2l +
-    b_dose2_residence_2l * doses2.1 * residence_2l +
-    b_dose3_residence_2l * doses3.1 * residence_2l +
-    b_imported_residence_2l * origin.1 * residence_2l +
-      b_price_occupation_high * price.1 * occupation_high +
-    b_risk2_occupation_high * risk2.1 * occupation_high +
-    b_risk3_occupation_high * risk3.1 * occupation_high +
-    b_duration2_occupation_high * duration2.1 * occupation_high +
-    b_duration3_occupation_high * duration3.1 * occupation_high +
-    b_efficacy2_occupation_high * efficacy2.1 * occupation_high +
-    b_efficacy3_occupation_high * efficacy3.1 * occupation_high +
-    b_oral_occupation_high * admin.1 * occupation_high +
-    b_dose2_occupation_high * doses2.1 * occupation_high +
-    b_dose3_occupation_high * doses3.1 * occupation_high +
-    b_imported_occupation_high * origin.1 * occupation_high +
-      b_price_occupation_mid * price.1 * occupation_mid +
-    b_risk2_occupation_mid * risk2.1 * occupation_mid +
-    b_risk3_occupation_mid * risk3.1 * occupation_mid +
-    b_duration2_occupation_mid * duration2.1 * occupation_mid +
-    b_duration3_occupation_mid * duration3.1 * occupation_mid +
-    b_efficacy2_occupation_mid * efficacy2.1 * occupation_mid +
-    b_efficacy3_occupation_mid * efficacy3.1 * occupation_mid +
-    b_oral_occupation_mid * admin.1 * occupation_mid +
-    b_dose2_occupation_mid * doses2.1 * occupation_mid +
-    b_dose3_occupation_mid * doses3.1 * occupation_mid +
-    b_imported_occupation_mid * origin.1 * occupation_mid +
-      b_price_insurance_2l * price.1 * insurance_2l +
-    b_risk2_insurance_2l * risk2.1 * insurance_2l +
-    b_risk3_insurance_2l * risk3.1 * insurance_2l +
-    b_duration2_insurance_2l * duration2.1 * insurance_2l +
-    b_duration3_insurance_2l * duration3.1 * insurance_2l +
-    b_efficacy2_insurance_2l * efficacy2.1 * insurance_2l +
-    b_efficacy3_insurance_2l * efficacy3.1 * insurance_2l +
-    b_oral_insurance_2l * admin.1 * insurance_2l +
-    b_dose2_insurance_2l * doses2.1 * insurance_2l +
-    b_dose3_insurance_2l * doses3.1 * insurance_2l +
-    b_imported_insurance_2l * origin.1 * insurance_2l +
-      b_price_income_high * price.1 * income_high +
-    b_risk2_income_high * risk2.1 * income_high +
-    b_risk3_income_high * risk3.1 * income_high +
-    b_duration2_income_high * duration2.1 * income_high +
-    b_duration3_income_high * duration3.1 * income_high +
-    b_efficacy2_income_high * efficacy2.1 * income_high +
-    b_efficacy3_income_high * efficacy3.1 * income_high +
-    b_oral_income_high * admin.1 * income_high +
-    b_dose2_income_high * doses2.1 * income_high +
-    b_dose3_income_high * doses3.1 * income_high +
-    b_imported_income_high * origin.1 * income_high +
-      b_price_income_mid * price.1 * income_mid +
-    b_risk2_income_mid * risk2.1 * income_mid +
-    b_risk3_income_mid * risk3.1 * income_mid +
-    b_duration2_income_mid * duration2.1 * income_mid +
-    b_duration3_income_mid * duration3.1 * income_mid +
-    b_efficacy2_income_mid * efficacy2.1 * income_mid +
-    b_efficacy3_income_mid * efficacy3.1 * income_mid +
-    b_oral_income_mid * admin.1 * income_mid +
-    b_dose2_income_mid * doses2.1 * income_mid +
-    b_dose3_income_mid * doses3.1 * income_mid +
-    b_imported_income_mid * origin.1 * income_mid +
-      b_price_chronic_2l * price.1 * chronic_2l +
-    b_risk2_chronic_2l * risk2.1 * chronic_2l +
-    b_risk3_chronic_2l * risk3.1 * chronic_2l +
-    b_duration2_chronic_2l * duration2.1 * chronic_2l +
-    b_duration3_chronic_2l * duration3.1 * chronic_2l +
-    b_efficacy2_chronic_2l * efficacy2.1 * chronic_2l +
-    b_efficacy3_chronic_2l * efficacy3.1 * chronic_2l +
-    b_oral_chronic_2l * admin.1 * chronic_2l +
-    b_dose2_chronic_2l * doses2.1 * chronic_2l +
-    b_dose3_chronic_2l * doses3.1 * chronic_2l +
-    b_imported_chronic_2l * origin.1 * chronic_2l +
-      b_price_hasvaccined_2l * price.1 * hasvaccined_2l +
-    b_risk2_hasvaccined_2l * risk2.1 * hasvaccined_2l +
-    b_risk3_hasvaccined_2l * risk3.1 * hasvaccined_2l +
-    b_duration2_hasvaccined_2l * duration2.1 * hasvaccined_2l +
-    b_duration3_hasvaccined_2l * duration3.1 * hasvaccined_2l +
-    b_efficacy2_hasvaccined_2l * efficacy2.1 * hasvaccined_2l +
-    b_efficacy3_hasvaccined_2l * efficacy3.1 * hasvaccined_2l +
-    b_oral_hasvaccined_2l * admin.1 * hasvaccined_2l +
-    b_dose2_hasvaccined_2l * doses2.1 * hasvaccined_2l +
-    b_dose3_hasvaccined_2l * doses3.1 * hasvaccined_2l +
-    b_imported_hasvaccined_2l * origin.1 * hasvaccined_2l +
-      b_price_depression_2l * price.1 * depression_2l +
-    b_risk2_depression_2l * risk2.1 * depression_2l +
-    b_risk3_depression_2l * risk3.1 * depression_2l +
-    b_duration2_depression_2l * duration2.1 * depression_2l +
-    b_duration3_depression_2l * duration3.1 * depression_2l +
-    b_efficacy2_depression_2l * efficacy2.1 * depression_2l +
-    b_efficacy3_depression_2l * efficacy3.1 * depression_2l +
-    b_oral_depression_2l * admin.1 * depression_2l +
-    b_dose2_depression_2l * doses2.1 * depression_2l +
-    b_dose3_depression_2l * doses3.1 * depression_2l +
-    b_imported_depression_2l * origin.1 * depression_2l
-  
-  V[["alt2"]] <- asc + b_price * price.2 + b_risk2 * risk2.2 + b_risk3 * risk3.2 +
-    b_duration2 * duration2.2 + b_duration3 * duration3.2 + b_efficacy2 * efficacy2.2 +
-    b_efficacy3 * efficacy3.2 + b_oral * admin.2 + b_dose2 * doses2.2 +
-    b_dose3*doses3.2 + b_imported*origin.2 + # below are respondents characteristics
-    b_gender_2l*gender_2l + b_age_high*age_high + b_age_mid*age_mid + 
-    b_education_high*education_high + b_education_mid*education_mid + 
-    b_marriage_2l*marriage_2l + b_residence_2l*residence_2l + 
-    b_occupation_high*occupation_high + b_occupation_mid*occupation_mid + 
-    b_insurance_2l*insurance_2l + b_income_high*income_high + 
-    b_income_mid*income_mid + b_chronic_2l*chronic_2l + 
-    b_hasvaccined_2l*hasvaccined_2l + b_depression_2l*depression_2l +# geographic terms
-    b_Hebei1*(province_31l == 1) + b_Shanxi2*(province_31l == 2) + 
-    b_Liaoning3 *(province_31l == 3) + b_Jilin4*(province_31l == 4) + 
-    b_Heilongjiang5*(province_31l == 5) + b_Jiangsu6*(province_31l == 6) + 
-    b_Zhejiang7*(province_31l == 7) + b_Anhui8*(province_31l == 8) + 
-    b_Fujian9*(province_31l == 9) + b_Jiangxi10*(province_31l == 10) + 
-    b_Shandong11*(province_31l == 11) + b_Henan12*(province_31l == 12) + 
-    b_Hubei13*(province_31l == 13) + b_Hunan14*(province_31l == 14) + 
-    b_Guangdong15*(province_31l == 15) + b_Hainan16*(province_31l == 16) + 
-    b_Sichuan17*(province_31l == 17) + b_Guizhou18*(province_31l == 18) + 
-    b_Yunnan19*(province_31l == 19) + b_Shaanxi20*(province_31l == 20) + 
-    b_Gansu21*(province_31l == 21) + b_Qinghai22*(province_31l == 22) + 
-    b_Neimongol23*(province_31l == 23) + b_Guangxi24*(province_31l == 24) + 
-    b_Tibet25*(province_31l == 25) + b_Ningxia26*(province_31l == 26) + 
-    b_Xinjiang27*(province_31l == 27) + b_Beijing28*(province_31l == 28) + 
-    b_Shanghai29*(province_31l == 29) + b_Tianjin30*(province_31l == 30) + 
-    b_Chongqing31*(province_31l == 31) + # below are interaction terms
-      b_price_gender_2l * price.2 * gender_2l +
-    b_risk2_gender_2l * risk2.2 * gender_2l +
-    b_risk3_gender_2l * risk3.2 * gender_2l +
-    b_duration2_gender_2l * duration2.2 * gender_2l +
-    b_duration3_gender_2l * duration3.2 * gender_2l +
-    b_efficacy2_gender_2l * efficacy2.2 * gender_2l +
-    b_efficacy3_gender_2l * efficacy3.2 * gender_2l +
-    b_oral_gender_2l * admin.2 * gender_2l +
-    b_dose2_gender_2l * doses2.2 * gender_2l +
-    b_dose3_gender_2l * doses3.2 * gender_2l +
-    b_imported_gender_2l * origin.2 * gender_2l +
-      b_price_age_high * price.2 * age_high +
-    b_risk2_age_high * risk2.2 * age_high +
-    b_risk3_age_high * risk3.2 * age_high +
-    b_duration2_age_high * duration2.2 * age_high +
-    b_duration3_age_high * duration3.2 * age_high +
-    b_efficacy2_age_high * efficacy2.2 * age_high +
-    b_efficacy3_age_high * efficacy3.2 * age_high +
-    b_oral_age_high * admin.2 * age_high +
-    b_dose2_age_high * doses2.2 * age_high +
-    b_dose3_age_high * doses3.2 * age_high +
-    b_imported_age_high * origin.2 * age_high +
-      b_price_age_mid * price.2 * age_mid +
-    b_risk2_age_mid * risk2.2 * age_mid +
-    b_risk3_age_mid * risk3.2 * age_mid +
-    b_duration2_age_mid * duration2.2 * age_mid +
-    b_duration3_age_mid * duration3.2 * age_mid +
-    b_efficacy2_age_mid * efficacy2.2 * age_mid +
-    b_efficacy3_age_mid * efficacy3.2 * age_mid +
-    b_oral_age_mid * admin.2 * age_mid +
-    b_dose2_age_mid * doses2.2 * age_mid +
-    b_dose3_age_mid * doses3.2 * age_mid +
-    b_imported_age_mid * origin.2 * age_mid +
-      b_price_education_high * price.2 * education_high +
-    b_risk2_education_high * risk2.2 * education_high +
-    b_risk3_education_high * risk3.2 * education_high +
-    b_duration2_education_high * duration2.2 * education_high +
-    b_duration3_education_high * duration3.2 * education_high +
-    b_efficacy2_education_high * efficacy2.2 * education_high +
-    b_efficacy3_education_high * efficacy3.2 * education_high +
-    b_oral_education_high * admin.2 * education_high +
-    b_dose2_education_high * doses2.2 * education_high +
-    b_dose3_education_high * doses3.2 * education_high +
-    b_imported_education_high * origin.2 * education_high +
-      b_price_education_mid * price.2 * education_mid +
-    b_risk2_education_mid * risk2.2 * education_mid +
-    b_risk3_education_mid * risk3.2 * education_mid +
-    b_duration2_education_mid * duration2.2 * education_mid +
-    b_duration3_education_mid * duration3.2 * education_mid +
-    b_efficacy2_education_mid * efficacy2.2 * education_mid +
-    b_efficacy3_education_mid * efficacy3.2 * education_mid +
-    b_oral_education_mid * admin.2 * education_mid +
-    b_dose2_education_mid * doses2.2 * education_mid +
-    b_dose3_education_mid * doses3.2 * education_mid +
-    b_imported_education_mid * origin.2 * education_mid +
-      b_price_marriage_2l * price.2 * marriage_2l +
-    b_risk2_marriage_2l * risk2.2 * marriage_2l +
-    b_risk3_marriage_2l * risk3.2 * marriage_2l +
-    b_duration2_marriage_2l * duration2.2 * marriage_2l +
-    b_duration3_marriage_2l * duration3.2 * marriage_2l +
-    b_efficacy2_marriage_2l * efficacy2.2 * marriage_2l +
-    b_efficacy3_marriage_2l * efficacy3.2 * marriage_2l +
-    b_oral_marriage_2l * admin.2 * marriage_2l +
-    b_dose2_marriage_2l * doses2.2 * marriage_2l +
-    b_dose3_marriage_2l * doses3.2 * marriage_2l +
-    b_imported_marriage_2l * origin.2 * marriage_2l +
-      b_price_residence_2l * price.2 * residence_2l +
-    b_risk2_residence_2l * risk2.2 * residence_2l +
-    b_risk3_residence_2l * risk3.2 * residence_2l +
-    b_duration2_residence_2l * duration2.2 * residence_2l +
-    b_duration3_residence_2l * duration3.2 * residence_2l +
-    b_efficacy2_residence_2l * efficacy2.2 * residence_2l +
-    b_efficacy3_residence_2l * efficacy3.2 * residence_2l +
-    b_oral_residence_2l * admin.2 * residence_2l +
-    b_dose2_residence_2l * doses2.2 * residence_2l +
-    b_dose3_residence_2l * doses3.2 * residence_2l +
-    b_imported_residence_2l * origin.2 * residence_2l +
-      b_price_occupation_high * price.2 * occupation_high +
-    b_risk2_occupation_high * risk2.2 * occupation_high +
-    b_risk3_occupation_high * risk3.2 * occupation_high +
-    b_duration2_occupation_high * duration2.2 * occupation_high +
-    b_duration3_occupation_high * duration3.2 * occupation_high +
-    b_efficacy2_occupation_high * efficacy2.2 * occupation_high +
-    b_efficacy3_occupation_high * efficacy3.2 * occupation_high +
-    b_oral_occupation_high * admin.2 * occupation_high +
-    b_dose2_occupation_high * doses2.2 * occupation_high +
-    b_dose3_occupation_high * doses3.2 * occupation_high +
-    b_imported_occupation_high * origin.2 * occupation_high +
-      b_price_occupation_mid * price.2 * occupation_mid +
-    b_risk2_occupation_mid * risk2.2 * occupation_mid +
-    b_risk3_occupation_mid * risk3.2 * occupation_mid +
-    b_duration2_occupation_mid * duration2.2 * occupation_mid +
-    b_duration3_occupation_mid * duration3.2 * occupation_mid +
-    b_efficacy2_occupation_mid * efficacy2.2 * occupation_mid +
-    b_efficacy3_occupation_mid * efficacy3.2 * occupation_mid +
-    b_oral_occupation_mid * admin.2 * occupation_mid +
-    b_dose2_occupation_mid * doses2.2 * occupation_mid +
-    b_dose3_occupation_mid * doses3.2 * occupation_mid +
-    b_imported_occupation_mid * origin.2 * occupation_mid +
-      b_price_insurance_2l * price.2 * insurance_2l +
-    b_risk2_insurance_2l * risk2.2 * insurance_2l +
-    b_risk3_insurance_2l * risk3.2 * insurance_2l +
-    b_duration2_insurance_2l * duration2.2 * insurance_2l +
-    b_duration3_insurance_2l * duration3.2 * insurance_2l +
-    b_efficacy2_insurance_2l * efficacy2.2 * insurance_2l +
-    b_efficacy3_insurance_2l * efficacy3.2 * insurance_2l +
-    b_oral_insurance_2l * admin.2 * insurance_2l +
-    b_dose2_insurance_2l * doses2.2 * insurance_2l +
-    b_dose3_insurance_2l * doses3.2 * insurance_2l +
-    b_imported_insurance_2l * origin.2 * insurance_2l +
-      b_price_income_high * price.2 * income_high +
-    b_risk2_income_high * risk2.2 * income_high +
-    b_risk3_income_high * risk3.2 * income_high +
-    b_duration2_income_high * duration2.2 * income_high +
-    b_duration3_income_high * duration3.2 * income_high +
-    b_efficacy2_income_high * efficacy2.2 * income_high +
-    b_efficacy3_income_high * efficacy3.2 * income_high +
-    b_oral_income_high * admin.2 * income_high +
-    b_dose2_income_high * doses2.2 * income_high +
-    b_dose3_income_high * doses3.2 * income_high +
-    b_imported_income_high * origin.2 * income_high +
-      b_price_income_mid * price.2 * income_mid +
-    b_risk2_income_mid * risk2.2 * income_mid +
-    b_risk3_income_mid * risk3.2 * income_mid +
-    b_duration2_income_mid * duration2.2 * income_mid +
-    b_duration3_income_mid * duration3.2 * income_mid +
-    b_efficacy2_income_mid * efficacy2.2 * income_mid +
-    b_efficacy3_income_mid * efficacy3.2 * income_mid +
-    b_oral_income_mid * admin.2 * income_mid +
-    b_dose2_income_mid * doses2.2 * income_mid +
-    b_dose3_income_mid * doses3.2 * income_mid +
-    b_imported_income_mid * origin.2 * income_mid +
-      b_price_chronic_2l * price.2 * chronic_2l +
-    b_risk2_chronic_2l * risk2.2 * chronic_2l +
-    b_risk3_chronic_2l * risk3.2 * chronic_2l +
-    b_duration2_chronic_2l * duration2.2 * chronic_2l +
-    b_duration3_chronic_2l * duration3.2 * chronic_2l +
-    b_efficacy2_chronic_2l * efficacy2.2 * chronic_2l +
-    b_efficacy3_chronic_2l * efficacy3.2 * chronic_2l +
-    b_oral_chronic_2l * admin.2 * chronic_2l +
-    b_dose2_chronic_2l * doses2.2 * chronic_2l +
-    b_dose3_chronic_2l * doses3.2 * chronic_2l +
-    b_imported_chronic_2l * origin.2 * chronic_2l +
-      b_price_hasvaccined_2l * price.2 * hasvaccined_2l +
-    b_risk2_hasvaccined_2l * risk2.2 * hasvaccined_2l +
-    b_risk3_hasvaccined_2l * risk3.2 * hasvaccined_2l +
-    b_duration2_hasvaccined_2l * duration2.2 * hasvaccined_2l +
-    b_duration3_hasvaccined_2l * duration3.2 * hasvaccined_2l +
-    b_efficacy2_hasvaccined_2l * efficacy2.2 * hasvaccined_2l +
-    b_efficacy3_hasvaccined_2l * efficacy3.2 * hasvaccined_2l +
-    b_oral_hasvaccined_2l * admin.2 * hasvaccined_2l +
-    b_dose2_hasvaccined_2l * doses2.2 * hasvaccined_2l +
-    b_dose3_hasvaccined_2l * doses3.2 * hasvaccined_2l +
-    b_imported_hasvaccined_2l * origin.2 * hasvaccined_2l +
-      b_price_depression_2l * price.2 * depression_2l +
-    b_risk2_depression_2l * risk2.2 * depression_2l +
-    b_risk3_depression_2l * risk3.2 * depression_2l +
-    b_duration2_depression_2l * duration2.2 * depression_2l +
-    b_duration3_depression_2l * duration3.2 * depression_2l +
-    b_efficacy2_depression_2l * efficacy2.2 * depression_2l +
-    b_efficacy3_depression_2l * efficacy3.2 * depression_2l +
-    b_oral_depression_2l * admin.2 * depression_2l +
-    b_dose2_depression_2l * doses2.2 * depression_2l +
-    b_dose3_depression_2l * doses3.2 * depression_2l +
-    b_imported_depression_2l * origin.2 * depression_2l
-  V[["alt3"]] <- 0
-
-  ### Specify nests for NL model
-  nlNests <- list(root = 1, PT = lambda_PT)
-
-  ### Specify tree structure for NL model
-  nlStructure <- list()
-  nlStructure[["root"]] <- c("alt3", "PT")
-  nlStructure[["PT"]] <- c("alt1", "alt2")
-
-  ### Define settings for MNL model component
-  nl_settings <- list(
-    alternatives = c(alt1 = 1, alt2 = 2, alt3 = 3),
-    avail        = list(alt1 = 1, alt2 = 1, alt3 = 1),
-    choiceVar    = choice,
-    V            = V,
-    nlNests      = nlNests,
-    nlStructure  = nlStructure
-  )
-
-  ### Compute probabilities using NL model
-  P[["model"]] <- apollo_nl(nl_settings, functionality)
-
-  ### Take product across observation for same individual
-  P <- apollo_panelProd(P, apollo_inputs, functionality)
-
-
-  ### Prepare and return outputs of function
-  P <- apollo_prepareProb(P, apollo_inputs, functionality)
-
-  return(P)
-}
-
-# ####################################################### #
-#### 6. Model estimation                   ####
-# ####################################################### #
-fit <- apollo_estimate(
-  apollo_beta, apollo_fixed,
-  apollo_probabilities, apollo_inputs
-)
-
-save(fit, FormatResult, file = paste0(getwd(), "/Model/NL_interaction.RData"))
-```
-
-#### report extended result
-
-```{r result of extended model}
-#### Effect of main term and individual characteristics
-load(file = "Model/NL_interaction_weighted.RData")
-result_dat = FormatResult(fit)
-export(result_dat[1:27, ], "Result/NL_extended_weighted.csv", row.names = TRUE)
-
-#### Beta and OR matrix
-beta_dat <- result_dat %>%
-  mutate(
-  Estimate = ifelse(str_detect(rownames(result_dat), "price"), Estimate*100, Estimate), # multiply the beta of 100 RMB.
-  beta = paste0(as.character(signif(Estimate,2)), 
-                case_when(p_value == "<0.001" ~ "***",
-                          p_value >= 0.001 & p_value < 0.01 ~ "**",
-                          p_value >= 0.01 & p_value < 0.05 ~ "*",
-                          p_value >= 0.05 ~ "")),
-  OR = paste0(as.character(signif(exp(Estimate),4)), 
-                case_when(p_value == "<0.001" ~ "***",
-                          p_value >= 0.001 & p_value < 0.01 ~ "**",
-                          p_value >= 0.01 & p_value < 0.05 ~ "*",
-                          p_value >= 0.05 ~ ""))
-)
-
-interaction_effect_pvalue_mat <- matrix(beta_dat$beta[58:222], nrow = 15, ncol = 11, byrow = TRUE, dimnames = list(rownames = c("Gender: Female", "Age: >60 years", "Age: 40-59 years", "Education: college and above", "Education: Middle and high school", "Marriage: married", "Residence: Urban", "No jobs", "Work in a public sector", "Insurance: UEBMI", "High income", "Middle income", "Chronic: has any chronic conditions", "COVID-19 vaccination history: has taken at least one dose", "Depression: depressed"), col_names = c("Price", "Risk: one in a million", "Risk: one in hundred thousand ", "Duration: 12 months", "Duration: life long", "Efficacy: 70%", "Efficacy: 90%", "Oral", "2 doses", "3 doses", "imported")))
-
-interaction_OR_p_value_mat <- matrix(beta_dat$OR[58:222], nrow = 15, ncol = 11, byrow = TRUE, dimnames = list(rownames = c("Gender: Female", "Age: 18-39 years", "Age: 40-59 years", "Education: primary school or less", "Education: Middle and high school", "Marriage: married", "Residence: Urban", "Work in a private sector", "Work in a public sector", "Insurance: UEBMI", "Income: < 60000 RMB", "Income: 60000 - 149999 RMB", "Chronic: has any chronic conditions", "COVID-19 vaccination history: has taken at least one dose", "Depression: depressed"), col_names = c("price", "risk: one in a million", "risk: one in hundred thousand ", "duration: 12 months", "duration: life long", "efficacy: 70%", "efficacy: 90%", "oral", "2 doses", "3 doses", "imported")))
-
-export(interaction_effect_pvalue_mat,"Result/NL_extended_beta_matrix_weighted.csv", row.names = TRUE)
-export(interaction_OR_p_value_mat,"Result/NL_extended_OR_matrix_weighted.csv", row.names = TRUE)
-
-#### province effect
-
-# load(file = "Model/NL_interaction.RData")
-# result_dat <- FormatResult(fit)
-WTP_Chongqing31 <- deltaMethod(fit, "(b_Hebei1+b_Shanxi2+b_Liaoning3+b_Jilin4+b_Heilongjiang5+b_Jiangsu6+b_Zhejiang7+b_Anhui8+b_Fujian9+b_Jiangxi10+b_Shandong11+b_Henan12+b_Hubei13+b_Hunan14+b_Guangdong15+b_Hainan16+b_Sichuan17+b_Guizhou18+b_Yunnan19+b_Shaanxi20+b_Gansu21+b_Qinghai22+b_Neimongol23+b_Guangxi24+b_Tibet25+b_Ningxia26+b_Xinjiang27+b_Beijing28+b_Shanghai29+b_Tianjin30)/b_price", func = "WTP_Chongqing31", vcov. = fit$robvarcov)
-
-b_Chongqing31 <- deltaMethod(fit, "-(b_Hebei1+b_Shanxi2+b_Liaoning3+b_Jilin4+b_Heilongjiang5+b_Jiangsu6+b_Zhejiang7+b_Anhui8+b_Fujian9+b_Jiangxi10+b_Shandong11+b_Henan12+b_Hubei13+b_Hunan14+b_Guangdong15+b_Hainan16+b_Sichuan17+b_Guizhou18+b_Yunnan19+b_Shaanxi20+b_Gansu21+b_Qinghai22+b_Neimongol23+b_Guangxi24+b_Tibet25+b_Ningxia26+b_Xinjiang27+b_Beijing28+b_Shanghai29+b_Tianjin30)", func = "b_Chongqing31", vcov. = fit$robvarcov)
-
-b_Chongqing31 <- b_Chongqing31 %>%
-  select(Estimate, `2.5 %`, `97.5 %`) %>%
-  rename(
-    `2.5%` = `2.5 %`,
-    `97.5%` = `97.5 %`
-  ) %>%
-  mutate(
-    WTP = WTP_Chongqing31$Estimate,
-    p_value = ifelse(
-      as.numeric(b_Chongqing31[1]/b_Chongqing31[2])>0,
-      2*(1-pt(as.numeric(b_Chongqing31[1]/b_Chongqing31[2]),df = 143998)),
-      2*pt(as.numeric(b_Chongqing31[1]/b_Chongqing31[2]),df = 143998)
-    ),
-    WTP_p_value = ifelse(
-      as.numeric(WTP_Chongqing31[1]/WTP_Chongqing31[2])>0,
-      2*(1-pt(as.numeric(WTP_Chongqing31[1]/WTP_Chongqing31[2]),df = 143998)),
-      2*pt(as.numeric(WTP_Chongqing31[1]/WTP_Chongqing31[2]),df = 143998)
-    )
-  )
-
-province_dat <- rbind(result_dat[28:57, ], b_Chongqing31)
-
-write.csv(province_dat,file = "Result/NL_extended_province_weighted.csv")
-```
-
-```{r draw the province map}
-map_data <- import("Data/Chinamap_data.xlsx")
-map_data <- province_dat %>%
-  dplyr::select(WTP) %>%
-  mutate(
-    WTP = WTP+result_dat$WTP[1],
-    province = sapply(str_split(rownames(province_dat), pattern = "_|\\d"), "[", 2)
-  ) %>%
-  right_join(map_data, by = "province")
-
-# Approach 1: using the shp data -----
-
-mydat = rgdal::readOGR("Data/Mapdata/中华人民共和国.shp")
-
-# convert the `SpatialPolygonsDataFrame` type into `data.frame`# if error occurs, type `gpclibPermit()`
-gpclibPermit()
-mysh <- fortify(mydat)
-
-# convert the method of encoding
-mysh = transform(mysh, name = iconv(name, from = "UTF8"))
-
-names(mysh)[2:3] = c("x","y")
-unique(mysh$name)
-data_merge <- left_join(mysh,map_data)
-
-pidat1 <-subset(data_merge,select = c("name","id","province_abbr","WTP"))%>%
-         unique() 
-
-# determine the fonts
-windowsFonts(myFont = windowsFont("Times New Roman"))
-
-map = ggplot(pidat1) +
-  geom_map(aes(map_id = id, fill = WTP), color = "grey", map = mysh) +
-  # geom_text_repel(data=cnames,aes(long_mean,lat_mean,label=province_abbr),size=3,fontface="bold")+
-  scale_fill_distiller(name = "WTP (RMB)", palette = "RdYlGn", direction = 1) +
-  expand_limits(mysh) + 
-  coord_map() + #使用mapproj包将地球的一部分（近似球形）投影到2D平面
-  labs(x = "", y = "", title = "",subtitle = "")+
-  theme(
-    legend.title = element_text(family = "myFont", face = "bold"),
-    panel.grid.major =  element_blank(), 
-    panel.grid.minor = element_blank(),
-    panel.background = element_blank(),
-    axis.line = element_blank(),
-    axis.text = element_blank(),
-    axis.ticks = element_blank()) +
-  labs(fill = "WTP (RMB)")
-
-print(map)
-ggsave(filename = "Figure/Map.png", map, width = 10, height = 10, dpi = 300, units = "in", device='png')
-
-# Approach 2: use the json data -----
-
-library(tidyverse)
-library(readxl)
-library(sf)
-library(ggplot2)
-
-# 获取全国省级地图，则加后缀quanguo.json
-# 获取全国县级地图，则加后缀xian_quanguo.json
-# 获取部分地区，如某个市的县级地图，则加该行政区域代码，再加.json
-# 如果要获取市级地图，需要按遍历行政区域代码获取所有市的地图，然后合并县级区域
-# 全国主要山脉，南海九段线数据，则加后缀quanguo_Line.geojson
-
-API_pre = "http://xzqh.mca.gov.cn/data/"
-
-China <- st_read(dsn = paste0(API_pre, "quanguo.json"),stringsAsFactors = FALSE)
-
-# check whether the data contains the projecting information
-st_crs(China) # NA means no such information; need to attach manually
-China <- st_set_crs(China, 4326)
-China <- st_transform(China, "+init=epsg:4508")
-
-
-data_merge <- China %>%
-  left_join(map_data, by = "QUHUADAIMA")
-
-# determine the fonts
-windowsFonts(myFont = windowsFont("Times New Roman"))
-
-map<-ggplot() + # 底图
-  geom_sf(data = data_merge, aes(fill = WTP)) + # 省域
-  coord_sf() +  # 投影方式
-  scale_fill_distiller(name = "WTP (RMB)", palette = "RdYlGn", direction = 1) +
-  theme(
-    legend.title = element_text(family = "myFont", face = "bold", size = 12),
-    panel.grid.major =  element_blank(), 
-    panel.grid.minor = element_blank(),
-    panel.background = element_blank(),
-    axis.line = element_blank(),
-    axis.text = element_blank(),
-    axis.ticks = element_blank())
-
-print(map)
-ggsave(filename = "Figure/Map.png", map, width = 10, height = 10, dpi = 300, units = "in", device='png')
+write.csv(result_dat,file = "Result/CL.csv")
 ```
