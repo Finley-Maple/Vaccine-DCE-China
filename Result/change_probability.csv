@@ -1,0 +1,14 @@
+﻿Attribute,Attribute label,Change in probability
+Origin: Imported vs. domestic,Origin,-12.06
+Frequency: 3 doses vs. 1 dose,Frequency,-2.24
+Frequency: 2 doses vs. 1 dose,Frequency,-1.06
+Oral vs. injected,Oral,-1.84
+Duration: Life long vs. 6 months,Duration,2.72
+Duration: 12 months vs. 6 months,Duration,2.13
+Efficacy: 90% vs. 50%,Efficacy,2.63
+Efficacy: 70% vs. 50%,Efficacy,1.67
+Risk: High risk vs. no risk,Risk,-7.37
+Risk: Moderate risk vs. no risk,Risk,-6.73
+Price: 600 RMB vs. free,Price,-19.67
+Price: 400 RMB vs. free,Price,-10.78
+Price: 200 RMB vs. free,Price,-3.34

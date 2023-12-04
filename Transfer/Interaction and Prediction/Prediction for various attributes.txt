@@ -1,0 +1,29 @@
+Several observations per individual detected based on the value of ID. Setting panelData in apollo_control set to TRUE.
+All checks on apollo_control completed.
+All checks on database completed.
+Generating inter-individual draws ........... Done
+Your model contains continuous random parameters. apollo_prediction will perform averaging across draws for these. For predictions
+  at the level of individual draws, please call the apollo_probabilities function using model$estimate as the parameters, and with
+  functionality="raw".
+###################################################################################################################################################
+WARNING: Element database in the global environment differs from that inside apollo_inputs. The latter will be used. If you wish to
+  use the former, stop this function by pressing the "Escape" key, and rerun apollo_validateInputs before calling this function.
+###################################################################################################################################################
+Running predictions from model using parameter estimates...
+Running predictions across draws from the asymptotic distribution for maximum likelihood estimates.
+Predicting for set of draws 1/3...
+Predicting for set of draws 2/3...
+Predicting for set of draws 3/3...
+
+Aggregated prediction
+      at MLE Sampled mean Sampled std.dev. Quantile 0.025 Quantile 0.975
+alt1 1371.31      1370.09            2.137        1367.83        1371.67
+alt2   68.69        69.91            2.137          68.33          72.17
+
+Average prediction
+     at MLE Sampled mean Sampled std.dev. Quantile 0.025 Quantile 0.975
+alt1 0.9523      0.95145         0.001484        0.94988        0.95255
+alt2 0.0477      0.04855         0.001484        0.04745        0.05012
+
+The output from apollo_prediction is a list with two elements: a data.frame containing the predictions at the estimated values, and
+  an array with predictions for different values of the parameters drawn from their asymptotic distribution.

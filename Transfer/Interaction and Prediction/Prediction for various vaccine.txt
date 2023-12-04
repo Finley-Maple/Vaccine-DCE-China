@@ -1,0 +1,176 @@
+apollo_draws and apollo_randCoeff were found, so apollo_control$mixing
+  was set to TRUE
+Several observations per individual detected based on the value of ID.
+  Setting panelData in apollo_control set to TRUE.
+All checks on apollo_control completed.
+All checks on database completed.
+Generating inter-individual draws ........... Done
+Your model contains continuous random parameters. apollo_prediction
+  will perform averaging across draws for these. For predictions at the
+  level of individual draws, please call the apollo_probabilities
+  function using model$estimate as the parameters, and with
+  functionality="raw".
+###############################################################################
+WARNING: Element database in the global environment differs from that
+  inside apollo_inputs. The latter will be used. If you wish to use the
+  former, stop this function by pressing the "Escape" key, and rerun
+  apollo_validateInputs before calling this function.
+
+... current process will resume in 5 seconds unless interrupted by the user
+###############################################################################
+Running predictions from model using parameter estimates...
+Running predictions across draws from the asymptotic distribution for
+  maximum likelihood estimates.
+Predicting for set of draws 1/3...
+Predicting for set of draws 2/3...
+Predicting for set of draws 3/3...
+
+Aggregated prediction
+      at MLE Sampled mean Sampled std.dev. Quantile 0.025 Quantile 0.975
+alt1 71555.6        71541            12.41        71529.1        71552.5
+alt2 71555.6        71541            12.41        71529.1        71552.5
+alt3   888.8          917            24.81          894.9          941.8
+
+Average prediction
+       at MLE Sampled mean Sampled std.dev. Quantile 0.025 Quantile 0.975
+alt1 0.496914     0.496816        8.615e-05       0.496730        0.49689
+alt2 0.496914     0.496816        8.615e-05       0.496730        0.49689
+alt3 0.006172     0.006368        1.723e-04       0.006215        0.00654
+
+The output from apollo_prediction is a list with two elements: a
+  data.frame containing the predictions at the estimated values, and an
+  array with predictions for different values of the parameters drawn
+  from their asymptotic distribution.
+[1] 0.9938281
+apollo_draws and apollo_randCoeff were found, so apollo_control$mixing
+  was set to TRUE
+Several observations per individual detected based on the value of ID.
+  Setting panelData in apollo_control set to TRUE.
+All checks on apollo_control completed.
+All checks on database completed.
+Generating inter-individual draws ........... Done
+Your model contains continuous random parameters. apollo_prediction
+  will perform averaging across draws for these. For predictions at the
+  level of individual draws, please call the apollo_probabilities
+  function using model$estimate as the parameters, and with
+  functionality="raw".
+###############################################################################
+WARNING: Element database in the global environment differs from that
+  inside apollo_inputs. The latter will be used. If you wish to use the
+  former, stop this function by pressing the "Escape" key, and rerun
+  apollo_validateInputs before calling this function.
+
+... current process will resume in 5 seconds unless interrupted by the user
+###############################################################################
+Running predictions from model using parameter estimates...
+Running predictions across draws from the asymptotic distribution for
+  maximum likelihood estimates.
+Predicting for set of draws 1/3...
+Predicting for set of draws 2/3...
+Predicting for set of draws 3/3...
+
+Aggregated prediction
+     at MLE Sampled mean Sampled std.dev. Quantile 0.025 Quantile 0.975
+alt1  64230        64172            118.7          64057          64282
+alt2  64230        64172            118.7          64057          64282
+alt3  15541        15657            237.5          15436          15887
+
+Average prediction
+     at MLE Sampled mean Sampled std.dev. Quantile 0.025 Quantile 0.975
+alt1 0.4460       0.4456        0.0008246         0.4448         0.4464
+alt2 0.4460       0.4456        0.0008246         0.4448         0.4464
+alt3 0.1079       0.1087        0.0016491         0.1072         0.1103
+
+The output from apollo_prediction is a list with two elements: a
+  data.frame containing the predictions at the estimated values, and an
+  array with predictions for different values of the parameters drawn
+  from their asymptotic distribution.
+[1] 0.8920783
+apollo_draws and apollo_randCoeff were found, so apollo_control$mixing
+  was set to TRUE
+Several observations per individual detected based on the value of ID.
+  Setting panelData in apollo_control set to TRUE.
+All checks on apollo_control completed.
+All checks on database completed.
+Generating inter-individual draws ........... Done
+Your model contains continuous random parameters. apollo_prediction
+  will perform averaging across draws for these. For predictions at the
+  level of individual draws, please call the apollo_probabilities
+  function using model$estimate as the parameters, and with
+  functionality="raw".
+###############################################################################
+WARNING: Element database in the global environment differs from that
+  inside apollo_inputs. The latter will be used. If you wish to use the
+  former, stop this function by pressing the "Escape" key, and rerun
+  apollo_validateInputs before calling this function.
+
+... current process will resume in 5 seconds unless interrupted by the user
+###############################################################################
+Running predictions from model using parameter estimates...
+Running predictions across draws from the asymptotic distribution for
+  maximum likelihood estimates.
+Predicting for set of draws 1/3...
+Predicting for set of draws 2/3...
+Predicting for set of draws 3/3...
+
+Aggregated prediction
+     at MLE Sampled mean Sampled std.dev. Quantile 0.025 Quantile 0.975
+alt1  65971        65940            83.61          65852          66005
+alt2  65971        65940            83.61          65852          66005
+alt3  12057        12120           167.23          11990          12295
+
+Average prediction
+      at MLE Sampled mean Sampled std.dev. Quantile 0.025 Quantile 0.975
+alt1 0.45814      0.45792        0.0005806        0.45731        0.45837
+alt2 0.45814      0.45792        0.0005806        0.45731        0.45837
+alt3 0.08373      0.08417        0.0011613        0.08326        0.08538
+
+The output from apollo_prediction is a list with two elements: a
+  data.frame containing the predictions at the estimated values, and an
+  array with predictions for different values of the parameters drawn
+  from their asymptotic distribution.
+[1] 0.9162701
+apollo_draws and apollo_randCoeff were found, so apollo_control$mixing
+  was set to TRUE
+Several observations per individual detected based on the value of ID.
+  Setting panelData in apollo_control set to TRUE.
+All checks on apollo_control completed.
+All checks on database completed.
+Generating inter-individual draws ........... Done
+Your model contains continuous random parameters. apollo_prediction
+  will perform averaging across draws for these. For predictions at the
+  level of individual draws, please call the apollo_probabilities
+  function using model$estimate as the parameters, and with
+  functionality="raw".
+###############################################################################
+WARNING: Element database in the global environment differs from that
+  inside apollo_inputs. The latter will be used. If you wish to use the
+  former, stop this function by pressing the "Escape" key, and rerun
+  apollo_validateInputs before calling this function.
+
+... current process will resume in 5 seconds unless interrupted by the user
+###############################################################################
+Running predictions from model using parameter estimates...
+Running predictions across draws from the asymptotic distribution for
+  maximum likelihood estimates.
+Predicting for set of draws 1/3...
+Predicting for set of draws 2/3...
+Predicting for set of draws 3/3...
+
+Aggregated prediction
+     at MLE Sampled mean Sampled std.dev. Quantile 0.025 Quantile 0.975
+alt1  68462        68431               41          68397          68473
+alt2  68462        68431               41          68397          68473
+alt3   7077         7138               82           7053           7205
+
+Average prediction
+      at MLE Sampled mean Sampled std.dev. Quantile 0.025 Quantile 0.975
+alt1 0.47543      0.47522        0.0002847        0.47498        0.47551
+alt2 0.47543      0.47522        0.0002847        0.47498        0.47551
+alt3 0.04914      0.04957        0.0005694        0.04898        0.05004
+
+The output from apollo_prediction is a list with two elements: a
+  data.frame containing the predictions at the estimated values, and an
+  array with predictions for different values of the parameters drawn
+  from their asymptotic distribution.
+[1] 0.9508555

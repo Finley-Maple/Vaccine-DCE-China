@@ -19,7 +19,7 @@ apollo_control <- list(
   modelDescr = "Mixed logit model to determine Adults' preferences for a vaccine product",
   indivID = "ID",
   mixing = TRUE, # mixed logit model for random coefficients, FALSE for MNL model
-  nCores = 6
+  nCores = 72
   #,weights = "weight"
 )
 # ####################################################### #
@@ -49,6 +49,7 @@ database <- as.data.frame(database)
 
 apollo_beta <- c(
   asc = 0,
+  asc_loc = 0,
   b_price_mu = 0,
   b_risk2_mu = 0,
   b_risk3_mu = 0,
@@ -140,7 +141,7 @@ apollo_probabilities <- function(apollo_beta, apollo_inputs, functionality = "es
   
   ### List of utilities: these must use the same names as
   ### in mnl_settings, order is irrelevant.
-  V[["alt1"]] <- asc + b_price * price.1 + b_risk2 * risk2.1 + b_risk3 * risk3.1 +
+  V[["alt1"]] <- asc + asc_loc + b_price * price.1 + b_risk2 * risk2.1 + b_risk3 * risk3.1 +
     b_duration2 * duration2.1 + b_duration3 * duration3.1 + b_efficacy2 * efficacy2.1 +
     b_efficacy3 * efficacy3.1 + b_oral * admin.1 + b_dose2 * doses2.1 +
     b_dose3 * doses3.1 + b_imported * origin.1

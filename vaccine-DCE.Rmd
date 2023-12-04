@@ -7,24 +7,44 @@ output: html_document
 
 ```{r setup, include=FALSE}
 set.seed(123)
-library(readxl)
-library(fastR2) #
-library(weights) # analyze weighted data
-library(survey) # for the survey/weighted data
-library(gtsummary) # for quick table
-library(haven) # used to read sav file
-library(mlogit) # to test IIA assumptions
-library(dplyr)
-library(janitor) # data cleaning
-library(rio) # quick import and export files
-library(tidyverse) # used for pipeline operation
-library(car) # deltaMethod
-library(apollo) # analysis method
+pacman::p_load("readxl", "fastR2", "weights", "survey", "gtsummary", "haven", "mice",
+               "mlogit", "dplyr", "janitor", "rio", "tidyverse", "car", "apollo")
 
 # packages for the map
 pacman::p_load("maps", "fastR2", "mapdata", "maptools", "ggplot2", "mapproj", 
                "rgdal", "reshape2", "Hmisc", "jtools", "pscl", "aod", "gpclib")
 
+# Determine the fonts ----
+library(showtext)
+font_add("Times New Roman", "times.ttf")
+
+# Function used to analyze the apollo model output
+FormatResult_ML <- function(apollo_model){
+  df = apollo_model$nObs - length(apollo_model$estimate) - length(apollo_model$constraints) # degree of freedom
+  beta_dat <- as.data.frame(apollo_modelOutput(apollo_model, list(printPVal = TRUE)))[,c(1,5,7)] %>%
+    rename(p_value = `p(1-sided)`) %>%
+    mutate(
+      `2.5%` = Estimate + qnorm(0.025)*Rob.s.e.,
+      `97.5%` = Estimate + qnorm(0.975)*Rob.s.e.
+    ) %>%
+    dplyr::select(Estimate, `2.5%`, `97.5%`, p_value)
+  var_name <- names(coef(apollo_model))
+  beta_dat$WTP <- NA_real_
+  beta_dat$WTP_p_value <- NA_real_
+  for (i in c(1:length(var_name))) {
+    if (var_name[i]!="b_price"){
+      temp<-apollo_deltaMethod(apollo_model, deltaMethod_settings = list(operation = "ratio", 
+                                                                parName1 = var_name[i], 
+                                                                parName2 = "b_price_mu", 
+                                                                multPar1 = -1))
+      # beta_dat[var_name[i], "WTP"] = temp[1]
+      # # one sided p value
+      # beta_dat[var_name[i],"WTP_p_value"] = ifelse(temp[3]>0,(1-pt(temp[3],df)),pt(temp[3],df))
+    }
+  }
+  beta_dat <- beta_dat %>% mutate_at(vars(ends_with("p_value")), function(v) ifelse(v<1e-3,"<0.001",v))
+  return(beta_dat)
+}
 ```
 
 ## 0. sample characteristic
@@ -263,6 +283,9 @@ mysvy %>%
 
 # without weights
 
+
+
+
 dat %>%
   mutate(
     marriage_2l = as.factor(marriage_2l),
@@ -454,202 +477,10 @@ hmftest(x, g)
 
 ## 2. Mixed logit model
 
-### 2.1 Preference space
-
-```{r Mixed logit model}
-# use apollo package to analyze
-# ####################################################### #
-#### 1. Definition of core settings
-# ####################################################### #
-### Clear memory
-rm(list = ls())
-
-### Load library
-library(apollo)
-
-### Initialise code
-apollo_initialise()
-
-### Set core controls
-apollo_control <- list(
-  modelName = "Mixed logit model",
-  modelDescr = "Mixed logit model to determine Adults' preferences for a vaccine product",
-  indivID = "ID",
-  mixing = TRUE, # mixed logit model for random coefficients, FALSE for MNL model
-  nCores = 6
-  #,weights = "weight"
-)
-# ####################################################### #
-#### 2. Data loading                                   ####
-# ####################################################### #
-database <- read.csv(file = "Data/database.csv")
-database <- database[1:1440, ]
-database <- subset(database, select = c("ID","price.1","risk2.1","risk3.1","duration2.1",
-                                     "duration3.1","efficacy2.1","efficacy3.1",
-                                     "admin.1","doses2.1","doses3.1","origin.1",
-                                     "price.2","risk2.2","risk3.2",
-                                     "duration2.2","duration3.2","efficacy2.2",
-                                     "efficacy3.2","admin.2","doses2.2",
-                                     "doses3.2","origin.2","choice","weight"))
-
-database <- as.data.frame(database)
-
-# ####################################################### #
-#### 3. Parameter definition                           ####
-# ####################################################### #
-
-### Vector of parameters, including any that are kept fixed
-### during estimation
-
-apollo_beta <- c(
-  asc = 0,
-  b_price_mu = 0,
-  b_risk2_mu = 0,
-  b_risk3_mu = 0,
-  b_duration2_mu = 0,
-  b_duration3_mu = 0,
-  b_efficacy2_mu = 0,
-  b_efficacy3_mu = 0,
-  b_oral_mu = 0,
-  b_dose2_mu = 0,
-  b_dose3_mu = 0,
-  b_imported_mu = 0,
-  b_price_sigma = 0,
-  b_risk2_sigma = 0,
-  b_risk3_sigma = 0,
-  b_duration2_sigma = 0,
-  b_duration3_sigma = 0,
-  b_efficacy2_sigma = 0,
-  b_efficacy3_sigma = 0,
-  b_oral_sigma = 0,
-  b_dose2_sigma = 0,
-  b_dose3_sigma = 0,
-  b_imported_sigma = 0
-)
-
-### Vector with names (in quotes) of parameters to be kept fixed at their starting value in apollo_beta, use apollo_beta_fixed = c() if none
-apollo_fixed <- c()
-
-# ################################################################# #
-#### 4. Define Random Components                                    ####
-# ################################################################# #
-
-### Set parameters for generating draws
-apollo_draws <- list(
-  interDrawsType = "mlhs",
-  interNDraws = 500,
-  interUnifDraws = c(),
-  interNormDraws = paste0("draws_", c(
-    "price", "risk2",
-    "risk3", "duration2",
-    "duration3", "efficacy2",
-    "efficacy3", "oral",
-    "dose2", "dose3",
-    "imported"
-  )),
-  intraDrawsType = "",
-  intraNDraws = 0,
-  intraUnifDraws = c(),
-  intraNormDraws = c()
-)
-
-### Create random parameters
-apollo_randCoeff <- function(apollo_beta, apollo_inputs) {
-  randcoeff <- list()
-
-  randcoeff[["b_price"]] <- b_price_mu + b_price_sigma * draws_price
-  randcoeff[["b_risk2"]] <- b_risk2_mu + b_risk2_sigma * draws_risk2
-  randcoeff[["b_risk3"]] <- b_risk3_mu + b_risk3_sigma * draws_risk3
-  randcoeff[["b_duration2"]] <- b_duration2_mu + b_duration2_sigma * draws_duration2
-  randcoeff[["b_duration3"]] <- b_duration3_mu + b_duration3_sigma * draws_duration3
-  randcoeff[["b_efficacy2"]] <- b_efficacy2_mu + b_efficacy2_sigma * draws_efficacy2
-  randcoeff[["b_efficacy3"]] <- b_efficacy3_mu + b_efficacy3_sigma * draws_efficacy3
-  randcoeff[["b_oral"]] <- b_oral_mu + b_oral_sigma * draws_oral
-  randcoeff[["b_dose2"]] <- b_dose2_mu + b_dose2_sigma * draws_dose2
-  randcoeff[["b_dose3"]] <- b_dose3_mu + b_dose3_sigma * draws_dose3
-  randcoeff[["b_imported"]] <- b_imported_mu + b_imported_sigma * draws_imported
-
-  return(randcoeff)
-}
-
-# ####################################################### #
-#### 5. Input validation                               ####
-# ####################################################### #
-
-apollo_inputs <- apollo_validateInputs()
-
-# ####################################################### #
-#### 6. Likelihood definition                          ####
-# ####################################################### #
-
-apollo_probabilities <- function(apollo_beta, apollo_inputs, functionality = "estimate") {
-  ### Attach inputs and detach after function exit
-  apollo_attach(apollo_beta, apollo_inputs)
-  on.exit(apollo_detach(apollo_beta, apollo_inputs))
-
-  ### Create list of probabilities P
-  P <- list()
-
-  V <- list()
-
-  ### List of utilities: these must use the same names as
-  ### in mnl_settings, order is irrelevant.
-  V[["alt1"]] <- asc + b_price * price.1 + b_risk2 * risk2.1 + b_risk3 * risk3.1 +
-    b_duration2 * duration2.1 + b_duration3 * duration3.1 + b_efficacy2 * efficacy2.1 +
-    b_efficacy3 * efficacy3.1 + b_oral * admin.1 + b_dose2 * doses2.1 +
-    b_dose3 * doses3.1 + b_imported * origin.1
-  V[["alt2"]] <- asc + b_price * price.2 + b_risk2 * risk2.2 + b_risk3 * risk3.2 +
-    b_duration2 * duration2.2 + b_duration3 * duration3.2 + b_efficacy2 * efficacy2.2 +
-    b_efficacy3 * efficacy3.2 + b_oral * admin.2 + b_dose2 * doses2.2 +
-    b_dose3 * doses3.2 + b_imported * origin.2
-  V[["alt3"]] <- 0
-
-  ### Define settings for MNL model component
-  mnl_settings <- list(
-    alternatives = c(alt1 = 1, alt2 = 2, alt3 = 3),
-    avail        = list(alt1 = 1, alt2 = 1, alt3 = 1),
-    choiceVar    = choice,
-    V            = V
-  )
-
-  ### Compute probabilities using MNL model
-  P[["model"]] <- apollo_mnl(mnl_settings, functionality)
-
-  ### Take product across observation for same individual
-  P = apollo_panelProd(P, apollo_inputs, functionality)
-
-  ### Average across inter-individual draws
-  P = apollo_avgInterDraws(P, apollo_inputs, functionality)
-
-  ### Prepare and return outputs of function
-  P = apollo_prepareProb(P, apollo_inputs, functionality)
-  
-  ### Using sampling weights in estimation and prediction
-  # P = apollo_weighting(P, apollo_inputs, functionality)
-
-  return(P)
-}
-
-# ####################################################### #
-#### 7. Model estimation                ####
-# ####################################################### #
-
-fit <- apollo_estimate(
-  apollo_beta, apollo_fixed,
-  apollo_probabilities, apollo_inputs
-)
-
-save(fit, file = paste0(getwd(), "/Model/ML_preference_space.RData"))
-
-# speed testing for multicores
-
-# speedTest_settings=list(nDrawsTry = c(50, 100),nCoresTry = 1:6,nRep = 10)
-# 
-# apollo_speedTest(apollo_beta, apollo_fixed, apollo_probabilities, apollo_inputs, speedTest_settings)
-```
 
 
-### 2.2 WTP space
+
+### 2.1 WTP space
 
 ```{r}
 # use apollo package to analyze
@@ -836,7 +667,7 @@ fit <- apollo_estimate(
 save(fit, file = paste0(getwd(), "/Model/ML_WTP_sapce.RData"))
 ```
 
-### 2.3 Interaction term in Preference space
+### 2.2 Interaction term in Preference space
 
 ```{r}
 # use apollo package to analyze
@@ -866,7 +697,7 @@ apollo_control <- list(
 # ####################################################### #
 database <- read.csv(file = "Data/database.csv")
 
-database <- database[1:1440, ]
+database <- database[1:1440, ] # for testing
 
 socio_dat <- read.csv(file = "Data/socio_dat.csv")
 database <- database %>%
@@ -884,6 +715,7 @@ database <- as.data.frame(database)
 
 apollo_beta <- c(
   asc = 2.14,
+  asc_loc = 0, # ASC: location parameter, accounting for the left to right bias
   b_price_mu  = -0.00055,
   b_risk2_mu  = -0.354,
   b_risk3_mu  = -0.327,
@@ -910,36 +742,36 @@ apollo_beta <- c(
   # b_chronic_2l = 0,
   # b_hasvaccined_2l = 0,
   # b_depression_2l = 0,
-    b_Hebei1 = 0,
-  b_Shanxi2 = 0,
-  b_Liaoning3 = 0,
-  b_Jilin4 = 0,
-  b_Heilongjiang5 = 0,
-  b_Jiangsu6 = 0,
-  b_Zhejiang7 = 0,
-  b_Anhui8 = 0,
-  b_Fujian9 = 0,
-  b_Jiangxi10 = 0,
-  b_Shandong11 = 0,
-  b_Henan12 = 0,
-  b_Hubei13 = 0,
-  b_Hunan14 = 0,
-  b_Guangdong15 = 0,
-  b_Hainan16 = 0,
-  b_Sichuan17 = 0,
-  b_Guizhou18 = 0,
-  b_Yunnan19 = 0,
-  b_Shaanxi20 = 0,
-  b_Gansu21 = 0,
-  b_Qinghai22 = 0,
-  b_Neimongol23 = 0,
-  b_Guangxi24 = 0,
-  b_Tibet25 = 0,
-  b_Ningxia26 = 0,
-  b_Xinjiang27 = 0,
-  b_Beijing28 = 0,
-  b_Shanghai29 = 0,
-  b_Tianjin30 = 0,
+  #   b_Hebei1 = 0,
+  # b_Shanxi2 = 0,
+  # b_Liaoning3 = 0,
+  # b_Jilin4 = 0,
+  # b_Heilongjiang5 = 0,
+  # b_Jiangsu6 = 0,
+  # b_Zhejiang7 = 0,
+  # b_Anhui8 = 0,
+  # b_Fujian9 = 0,
+  # b_Jiangxi10 = 0,
+  # b_Shandong11 = 0,
+  # b_Henan12 = 0,
+  # b_Hubei13 = 0,
+  # b_Hunan14 = 0,
+  # b_Guangdong15 = 0,
+  # b_Hainan16 = 0,
+  # b_Sichuan17 = 0,
+  # b_Guizhou18 = 0,
+  # b_Yunnan19 = 0,
+  # b_Shaanxi20 = 0,
+  # b_Gansu21 = 0,
+  # b_Qinghai22 = 0,
+  # b_Neimongol23 = 0,
+  # b_Guangxi24 = 0,
+  # b_Tibet25 = 0,
+  # b_Ningxia26 = 0,
+  # b_Xinjiang27 = 0,
+  # b_Beijing28 = 0,
+  # b_Shanghai29 = 0,
+  # b_Tianjin30 = 0,
     b_price_gender_2l = 0,
   b_risk2_gender_2l = 0,
   b_risk3_gender_2l = 0,
@@ -1080,16 +912,16 @@ apollo_beta <- c(
   b_oral_hasvaccined_2l = 0,
   b_dose3_hasvaccined_2l = 0,
   b_imported_hasvaccined_2l = 0,
-    b_price_depression_2l = 0,
-  b_risk2_depression_2l = 0,
-  b_risk3_depression_2l = 0,
-  b_duration2_depression_2l = 0,
-  b_duration3_depression_2l = 0,
-  b_efficacy2_depression_2l = 0,
-  b_efficacy3_depression_2l = 0,
-  b_oral_depression_2l = 0,
-  b_dose3_depression_2l = 0,
-  b_imported_depression_2l = 0,
+  #   b_price_depression_2l = 0,
+  # b_risk2_depression_2l = 0,
+  # b_risk3_depression_2l = 0,
+  # b_duration2_depression_2l = 0,
+  # b_duration3_depression_2l = 0,
+  # b_efficacy2_depression_2l = 0,
+  # b_efficacy3_depression_2l = 0,
+  # b_oral_depression_2l = 0,
+  # b_dose3_depression_2l = 0,
+  # b_imported_depression_2l = 0,
   b_price_sigma  = 0,
   b_risk2_sigma  = 0,
   b_risk3_sigma  = 0,
@@ -1167,13 +999,13 @@ apollo_probabilities <- function(apollo_beta, apollo_inputs, functionality = "es
   P <- list()
 
   ### Effect codings constraint
-  b_Chongqing31 = -b_Hebei1-b_Shanxi2-b_Liaoning3-b_Jilin4-b_Heilongjiang5-b_Jiangsu6-b_Zhejiang7-b_Anhui8-b_Fujian9-b_Jiangxi10-b_Shandong11-b_Henan12-b_Hubei13-b_Hunan14-b_Guangdong15-b_Hainan16-b_Sichuan17-b_Guizhou18-b_Yunnan19-b_Shaanxi20-b_Gansu21-b_Qinghai22-b_Neimongol23-b_Guangxi24-b_Tibet25-b_Ningxia26-b_Xinjiang27-b_Beijing28-b_Shanghai29-b_Tianjin30
+  # b_Chongqing31 = -b_Hebei1-b_Shanxi2-b_Liaoning3-b_Jilin4-b_Heilongjiang5-b_Jiangsu6-b_Zhejiang7-b_Anhui8-b_Fujian9-b_Jiangxi10-b_Shandong11-b_Henan12-b_Hubei13-b_Hunan14-b_Guangdong15-b_Hainan16-b_Sichuan17-b_Guizhou18-b_Yunnan19-b_Shaanxi20-b_Gansu21-b_Qinghai22-b_Neimongol23-b_Guangxi24-b_Tibet25-b_Ningxia26-b_Xinjiang27-b_Beijing28-b_Shanghai29-b_Tianjin30
   
   V <- list()
 
   ### List of utilities: these must use the same names as
   ### in mnl_settings, order is irrelevant.
-  V[["alt1"]] <- asc + b_price * price.1 + b_risk2 * risk2.1 + b_risk3 * risk3.1 +
+  V[["alt1"]] <- asc + asc_loc + b_price * price.1 + b_risk2 * risk2.1 + b_risk3 * risk3.1 +
     b_duration2 * duration2.1 + b_duration3 * duration3.1 + b_efficacy2 * efficacy2.1 +
     b_efficacy3 * efficacy3.1 + b_oral * admin.1 + b_dose2 * doses2.1 +
     b_dose3*doses3.1 + b_imported*origin.1 + # below are respondents characteristics
@@ -1184,22 +1016,22 @@ apollo_probabilities <- function(apollo_beta, apollo_inputs, functionality = "es
     # b_insurance_2l*insurance_2l + b_income_high*income_high + 
     # b_income_mid*income_mid + b_chronic_2l*chronic_2l + 
     # b_hasvaccined_2l*hasvaccined_2l + b_depression_2l*depression_2l + # geographic
-    b_Hebei1*(province_31l == 1) + b_Shanxi2*(province_31l == 2) +
-    b_Liaoning3 *(province_31l == 3) + b_Jilin4*(province_31l == 4) +
-    b_Heilongjiang5*(province_31l == 5) + b_Jiangsu6*(province_31l == 6) +
-    b_Zhejiang7*(province_31l == 7) + b_Anhui8*(province_31l == 8) +
-    b_Fujian9*(province_31l == 9) + b_Jiangxi10*(province_31l == 10) +
-    b_Shandong11*(province_31l == 11) + b_Henan12*(province_31l == 12) +
-    b_Hubei13*(province_31l == 13) + b_Hunan14*(province_31l == 14) +
-    b_Guangdong15*(province_31l == 15) + b_Hainan16*(province_31l == 16) +
-    b_Sichuan17*(province_31l == 17) + b_Guizhou18*(province_31l == 18) +
-    b_Yunnan19*(province_31l == 19) + b_Shaanxi20*(province_31l == 20) +
-    b_Gansu21*(province_31l == 21) + b_Qinghai22*(province_31l == 22) +
-    b_Neimongol23*(province_31l == 23) + b_Guangxi24*(province_31l == 24) +
-    b_Tibet25*(province_31l == 25) + b_Ningxia26*(province_31l == 26) +
-    b_Xinjiang27*(province_31l == 27) + b_Beijing28*(province_31l == 28) +
-    b_Shanghai29*(province_31l == 29) + b_Tianjin30*(province_31l == 30) +
-    b_Chongqing31*(province_31l == 31) + # below are interaction terms
+    # b_Hebei1*(province_31l == 1) + b_Shanxi2*(province_31l == 2) +
+    # b_Liaoning3 *(province_31l == 3) + b_Jilin4*(province_31l == 4) +
+    # b_Heilongjiang5*(province_31l == 5) + b_Jiangsu6*(province_31l == 6) +
+    # b_Zhejiang7*(province_31l == 7) + b_Anhui8*(province_31l == 8) +
+    # b_Fujian9*(province_31l == 9) + b_Jiangxi10*(province_31l == 10) +
+    # b_Shandong11*(province_31l == 11) + b_Henan12*(province_31l == 12) +
+    # b_Hubei13*(province_31l == 13) + b_Hunan14*(province_31l == 14) +
+    # b_Guangdong15*(province_31l == 15) + b_Hainan16*(province_31l == 16) +
+    # b_Sichuan17*(province_31l == 17) + b_Guizhou18*(province_31l == 18) +
+    # b_Yunnan19*(province_31l == 19) + b_Shaanxi20*(province_31l == 20) +
+    # b_Gansu21*(province_31l == 21) + b_Qinghai22*(province_31l == 22) +
+    # b_Neimongol23*(province_31l == 23) + b_Guangxi24*(province_31l == 24) +
+    # b_Tibet25*(province_31l == 25) + b_Ningxia26*(province_31l == 26) +
+    # b_Xinjiang27*(province_31l == 27) + b_Beijing28*(province_31l == 28) +
+    # b_Shanghai29*(province_31l == 29) + b_Tianjin30*(province_31l == 30) +
+    # b_Chongqing31*(province_31l == 31) + # below are interaction terms
       b_price_gender_2l * price.1 * gender_2l +
     b_risk2_gender_2l * risk2.1 * gender_2l +
     b_risk3_gender_2l * risk3.1 * gender_2l +
@@ -1340,16 +1172,16 @@ apollo_probabilities <- function(apollo_beta, apollo_inputs, functionality = "es
     b_oral_hasvaccined_2l * admin.1 * hasvaccined_2l +
     b_dose3_hasvaccined_2l * doses3.1 * hasvaccined_2l +
     b_imported_hasvaccined_2l * origin.1 * hasvaccined_2l +
-      b_price_depression_2l * price.1 * depression_2l +
-    b_risk2_depression_2l * risk2.1 * depression_2l +
-    b_risk3_depression_2l * risk3.1 * depression_2l +
-    b_duration2_depression_2l * duration2.1 * depression_2l +
-    b_duration3_depression_2l * duration3.1 * depression_2l +
-    b_efficacy2_depression_2l * efficacy2.1 * depression_2l +
-    b_efficacy3_depression_2l * efficacy3.1 * depression_2l +
-    b_oral_depression_2l * admin.1 * depression_2l +
-    b_dose3_depression_2l * doses3.1 * depression_2l +
-    b_imported_depression_2l * origin.1 * depression_2l
+    #   b_price_depression_2l * price.1 * depression_2l +
+    # b_risk2_depression_2l * risk2.1 * depression_2l +
+    # b_risk3_depression_2l * risk3.1 * depression_2l +
+    # b_duration2_depression_2l * duration2.1 * depression_2l +
+    # b_duration3_depression_2l * duration3.1 * depression_2l +
+    # b_efficacy2_depression_2l * efficacy2.1 * depression_2l +
+    # b_efficacy3_depression_2l * efficacy3.1 * depression_2l +
+    # b_oral_depression_2l * admin.1 * depression_2l +
+    # b_dose3_depression_2l * doses3.1 * depression_2l +
+    # b_imported_depression_2l * origin.1 * depression_2l
   
   V[["alt2"]] <- asc + b_price * price.2 + b_risk2 * risk2.2 + b_risk3 * risk3.2 +
     b_duration2 * duration2.2 + b_duration3 * duration3.2 + b_efficacy2 * efficacy2.2 +
@@ -1362,22 +1194,22 @@ apollo_probabilities <- function(apollo_beta, apollo_inputs, functionality = "es
     # b_insurance_2l*insurance_2l + b_income_high*income_high + 
     # b_income_mid*income_mid + b_chronic_2l*chronic_2l + 
     # b_hasvaccined_2l*hasvaccined_2l + b_depression_2l*depression_2l +# geographic terms
-    b_Hebei1*(province_31l == 1) + b_Shanxi2*(province_31l == 2) +
-    b_Liaoning3 *(province_31l == 3) + b_Jilin4*(province_31l == 4) +
-    b_Heilongjiang5*(province_31l == 5) + b_Jiangsu6*(province_31l == 6) +
-    b_Zhejiang7*(province_31l == 7) + b_Anhui8*(province_31l == 8) +
-    b_Fujian9*(province_31l == 9) + b_Jiangxi10*(province_31l == 10) +
-    b_Shandong11*(province_31l == 11) + b_Henan12*(province_31l == 12) +
-    b_Hubei13*(province_31l == 13) + b_Hunan14*(province_31l == 14) +
-    b_Guangdong15*(province_31l == 15) + b_Hainan16*(province_31l == 16) +
-    b_Sichuan17*(province_31l == 17) + b_Guizhou18*(province_31l == 18) +
-    b_Yunnan19*(province_31l == 19) + b_Shaanxi20*(province_31l == 20) +
-    b_Gansu21*(province_31l == 21) + b_Qinghai22*(province_31l == 22) +
-    b_Neimongol23*(province_31l == 23) + b_Guangxi24*(province_31l == 24) +
-    b_Tibet25*(province_31l == 25) + b_Ningxia26*(province_31l == 26) +
-    b_Xinjiang27*(province_31l == 27) + b_Beijing28*(province_31l == 28) +
-    b_Shanghai29*(province_31l == 29) + b_Tianjin30*(province_31l == 30) +
-    b_Chongqing31*(province_31l == 31) + # below are interaction terms
+    # b_Hebei1*(province_31l == 1) + b_Shanxi2*(province_31l == 2) +
+    # b_Liaoning3 *(province_31l == 3) + b_Jilin4*(province_31l == 4) +
+    # b_Heilongjiang5*(province_31l == 5) + b_Jiangsu6*(province_31l == 6) +
+    # b_Zhejiang7*(province_31l == 7) + b_Anhui8*(province_31l == 8) +
+    # b_Fujian9*(province_31l == 9) + b_Jiangxi10*(province_31l == 10) +
+    # b_Shandong11*(province_31l == 11) + b_Henan12*(province_31l == 12) +
+    # b_Hubei13*(province_31l == 13) + b_Hunan14*(province_31l == 14) +
+    # b_Guangdong15*(province_31l == 15) + b_Hainan16*(province_31l == 16) +
+    # b_Sichuan17*(province_31l == 17) + b_Guizhou18*(province_31l == 18) +
+    # b_Yunnan19*(province_31l == 19) + b_Shaanxi20*(province_31l == 20) +
+    # b_Gansu21*(province_31l == 21) + b_Qinghai22*(province_31l == 22) +
+    # b_Neimongol23*(province_31l == 23) + b_Guangxi24*(province_31l == 24) +
+    # b_Tibet25*(province_31l == 25) + b_Ningxia26*(province_31l == 26) +
+    # b_Xinjiang27*(province_31l == 27) + b_Beijing28*(province_31l == 28) +
+    # b_Shanghai29*(province_31l == 29) + b_Tianjin30*(province_31l == 30) +
+    # b_Chongqing31*(province_31l == 31) + # below are interaction terms
       b_price_gender_2l * price.2 * gender_2l +
     b_risk2_gender_2l * risk2.2 * gender_2l +
     b_risk3_gender_2l * risk3.2 * gender_2l +
@@ -1518,15 +1350,15 @@ apollo_probabilities <- function(apollo_beta, apollo_inputs, functionality = "es
     b_oral_hasvaccined_2l * admin.2 * hasvaccined_2l +
     b_dose3_hasvaccined_2l * doses3.2 * hasvaccined_2l +
     b_imported_hasvaccined_2l * origin.2 * hasvaccined_2l +
-      b_price_depression_2l * price.2 * depression_2l +
-    b_risk2_depression_2l * risk2.2 * depression_2l +
-    b_risk3_depression_2l * risk3.2 * depression_2l +
-    b_duration2_depression_2l * duration2.2 * depression_2l +
-    b_duration3_depression_2l * duration3.2 * depression_2l +
-    b_efficacy2_depression_2l * efficacy2.2 * depression_2l +
-    b_efficacy3_depression_2l * efficacy3.2 * depression_2l +
-    b_oral_depression_2l * admin.2 * depression_2l +
-    b_dose3_depression_2l * doses3.2 * depression_2l +
+    #   b_price_depression_2l * price.2 * depression_2l +
+    # b_risk2_depression_2l * risk2.2 * depression_2l +
+    # b_risk3_depression_2l * risk3.2 * depression_2l +
+    # b_duration2_depression_2l * duration2.2 * depression_2l +
+    # b_duration3_depression_2l * duration3.2 * depression_2l +
+    # b_efficacy2_depression_2l * efficacy2.2 * depression_2l +
+    # b_efficacy3_depression_2l * efficacy3.2 * depression_2l +
+    # b_oral_depression_2l * admin.2 * depression_2l +
+    # b_dose3_depression_2l * doses3.2 * depression_2l +
     b_imported_depression_2l * origin.2 * depression_2l
   V[["alt3"]] <- 0
 
@@ -1559,26 +1391,1271 @@ apollo_probabilities <- function(apollo_beta, apollo_inputs, functionality = "es
 # ####################################################### #
 #### 7. Model estimation                ####
 # ####################################################### #
-fit <- apollo_estimate(
-  apollo_beta, apollo_fixed,
-  apollo_probabilities, apollo_inputs
-)
-
-save(fit, file = paste0(getwd(), "/Model/ML_interaction_preference_space.RData"))
+# fit <- apollo_estimate(
+#   apollo_beta, apollo_fixed,
+#   apollo_probabilities, apollo_inputs
+# )
+# 
+# save(fit, file = paste0(getwd(), "/Model/ML_interaction_preference_space.RData"))
 ```
 
 
 ### 2.4 Analyze the results
 
-#### 2.4.1 Report the basic model results
+#### 2.4.1 Report the main effects of the extended model
 
 ```{r}
-# choose either one: ML_preference_space.RData / ML_corr_WTP_sapce.RData
-load(file = "Model/ML_preference_space.RData")
+fit<- apollo_loadModel("Model/Mixed logit model including interactions")
+result_dat = FormatResult_ML(fit)
+
+#write.csv(result_dat[c(1:13, 154:164), ],file = "Result/ML_extended_main.csv")
+```
+
+#### 2.4.2 Report the extended ML model result
+
+```{r result of extended model}
+#### Effect of main term and individual characteristics
+# fit<- apollo_loadModel("Model/Mixed logit model including interactions")
+# result_dat = FormatResult_ML(fit)
+Attribute = c("b_price", "b_risk1", "b_risk3", "b_risk2", "b_duration1", "b_duration2", "b_duration3", "b_efficacy1", "b_efficacy2", "b_efficacy3", "b_oral", "b_dose1", "b_dose2"  ,"b_dose3", "b_imported")
+Characteristic = c("gender_2l", "age_mid", "age_high", "education_mid", "education_high", "marriage_2l", "residence_2l", "occupation_mid", "occupation_high", "insurance_2l", "income_mid", "income_high", "chronic_2l", "hasvaccined_2l") # Exchange of risk 2 and risk 3
+
+# add significant stars
+# beta_dat = data.frame(Varname = c(), Coef = c(), CI = c())
+# for (i in 1:length(Characteristic)) {
+#   for (j in 1:length(Attribute)) {
+#     func_name = paste0(Attribute[j], "_mu+", Attribute[j],"_", Characteristic[i])
+#     if (Attribute[j] == "b_price"){
+#       temp <- round(deltaMethod(fit, func_name, vcov. = fit$robvarcov)*100,3)
+#       # record the significance level according to the p-value of Attribute[j]_Characteristic[i]
+#       p_value <- apollo_deltaMethod(fit, deltaMethod_settings = list(expression = paste0(Attribute[j], "_", Characteristic[i]), printPVal = TRUE))[1, 'p(1-sided)']
+#     }
+#     else if (str_ends(Attribute[j], "1")) {
+#       temp <- data.frame(Estimate = c("-"), `2.5%` = c("-"), `97.5%`=c("-"))
+#       p_value <- NA
+#     }
+#     else if (Attribute[j] == "b_dose2") {
+#       temp <- round(deltaMethod(fit, "b_dose2_mu", vcov. = fit$robvarcov),3)
+#       p_value <- NA
+#     }
+#     else {
+#       temp <- round(deltaMethod(fit, func_name, vcov. = fit$robvarcov),3)
+#       # record the significance level according to the p-value of Attribute[j]_Characteristic[i]
+#       p_value <- apollo_deltaMethod(fit, deltaMethod_settings = list(expression = paste0(Attribute[j], "_", Characteristic[i]), printPVal = TRUE))[1, 'p(1-sided)']
+#     }
+#     beta_dat[(i-1)*length(Attribute)+j, "Varname"] = paste0(Characteristic[i], "--", Attribute[j])
+#     if(is.na(p_value)){
+#       beta_dat[(i-1)*length(Attribute)+j, "Coef"] = paste0(temp$Estimate)
+#     } else {
+#       # give the significance star according to the p-value of Attribute[j]_Characteristic[i]
+#       if (p_value < 0.001) {
+#         beta_dat[(i-1)*length(Attribute)+j, "Coef"] = paste0(temp$Estimate, "***")
+#       } else if (p_value < 0.01) {
+#         beta_dat[(i-1)*length(Attribute)+j, "Coef"] = paste0(temp$Estimate, "**")
+#       } else if (p_value < 0.05) {
+#         beta_dat[(i-1)*length(Attribute)+j, "Coef"] = paste0(temp$Estimate, "*")
+#       } else {
+#         beta_dat[(i-1)*length(Attribute)+j, "Coef"] = paste0(temp$Estimate)
+#       }
+#     }
+#     beta_dat[(i-1)*length(Attribute)+j, "CI"] = paste0("[",temp$`2.5 %`, ",", temp$`97.5 %`, "]")
+#   }
+# }
+
+# export(beta_dat,"Result/ML_extended_interactions.csv")
+
+
+# Prepare the data for visualization ----
+# initialization the result dataframe
+total_effect_dat = data.frame(Attribute = c(), Characteristic = c(), Group = c(), Coef = c(), lwb = c(), upb = c(), stringsAsFactors = FALSE)
+
+c_Attribute = c("b_price", "b_risk3", "b_risk2", "b_duration2", "b_duration3", "b_efficacy2", "b_efficacy3", "b_oral", "b_dose2", "b_dose3", "b_imported")
+c_Characteristic = c(
+  "gender_2l", "age_mid", "age_high", "education_mid", 
+  "education_high", "marriage_2l", "residence_2l", "occupation_mid", 
+  "occupation_high", "insurance_2l", "income_mid", 
+  "income_high", "chronic_2l", "hasvaccined_2l") # Exchange of risk 2 and risk 3
+c_name_Characteristic = c(
+  "Female", "40-59 years", "60+ years", "Middle and high school", 
+  "College and above", "Married", "Urban", "Work in a public setting", 
+  "No job", "UEBMI", "Middle income", 
+  "High income", "Chronic disease diagnosis", "Has been vaccinated")
+# iterate by the attribute and characteristic and record the total effect
+for (i in 1:length(c_Attribute)){
+  for (j in 1:length(c_Characteristic)){
+    # calculate the total effect
+    func_name = paste0(c_Attribute[i], "_mu+", c_Attribute[i],"_", c_Characteristic[j])
+    if (c_Attribute[i] == "b_price"){
+      temp <- round(deltaMethod(fit, func_name, vcov. = fit$robvarcov)*100,3)
+    }
+    else if (str_ends(c_Attribute[i], "1")) {
+      temp <- data.frame(Estimate = c("-"), `2.5%` = c("-"), `97.5%`=c("-"))
+    }
+    else if (c_Attribute[i] == "b_dose2") {
+      temp <- round(deltaMethod(fit, "b_dose2_mu", vcov. = fit$robvarcov),3)
+    }
+    else {
+      temp <- round(deltaMethod(fit, func_name, vcov. = fit$robvarcov),3)
+    }
+    # record the total effect
+    total_effect_dat[(i-1)*length(c_Characteristic)+j, "Attribute"] = c_Attribute[i]
+    total_effect_dat[(i-1)*length(c_Characteristic)+j, "Characteristic"] = c_name_Characteristic[j]
+    # Group represent the category of the characteristic
+    total_effect_dat[(i-1)*length(c_Characteristic)+j, "Group"] = strsplit(c_Characteristic[j], "_")[[1]][1]
+    total_effect_dat[(i-1)*length(c_Characteristic)+j, "Coef"] = temp$Estimate
+    total_effect_dat[(i-1)*length(c_Characteristic)+j, "lwb"] = temp$`2.5 %`
+    total_effect_dat[(i-1)*length(c_Characteristic)+j, "upb"] = temp$`97.5 %`
+  }
+}
+
+
+# set the characteristic in the total effect dataframe as factor and switch the Attribute "risk2" and "risk3"
+total_effect_dat <- total_effect_dat %>%
+  mutate(
+    Characteristic=fct_relevel(
+      factor(Characteristic), 
+      levels = c(
+        "Has been vaccinated", "Chronic disease diagnosis", "High income",
+        "Middle income", "UEBMI", "No job", "Work in a public setting", "Urban", "Married",
+        "College and above", "Middle and high school", "60+ years", "40-59 years", "Female")),
+    Coef = as.numeric(Coef),
+    # switch the Attribute "risk2" and "risk3"
+    Attribute = ifelse(Attribute == "b_risk2", "b_risk3", ifelse(Attribute == "b_risk3", "b_risk2", Attribute))
+    )
+
+# initialize another dataframe for main effects
+main_effect_dat = data.frame(Attribute = c_Attribute, Coef = result_dat$Estimate[3:(length(c_Attribute)+2)])
+
+# multiply the coefficient of price by 100
+main_effect_dat$Coef[1] = main_effect_dat$Coef[1]*100
+```
+
+```{r Figure 1 Visualization of the interaction effects}
+showtext_auto()
+
+# Visualization of the interaction effects by each attribute using ggplot2
+for (i in c_Attribute){
+  # filter the data for each attribute
+  temp_dat = total_effect_dat[total_effect_dat$Attribute == i, ]
+  # plot the interaction effects
+  p = ggplot(temp_dat, aes(x = Characteristic, y = Coef, fill = Group)) +
+    # add point to show the coefficient with color for each group
+    geom_point(position = position_dodge(0.5), size = 10) +
+    # add error bar to show the confidence interval with color for each group
+    geom_linerange(aes(ymin = lwb, ymax = upb), position = position_dodge(0.9)) +
+    # set the range of y axis to be (-2, 2) and values (-2.00, -1.00, 0.00, 1.00, 2.00)
+    # scale_y_continuous(limits = c(-2, 3), breaks = seq(-2, 2, 1), labels = c("-2.00", "-1.00", "0", "1.00", "2.00")) +
+    # convert the horizontal figure to vertical figure
+    coord_flip() +
+    # add the horizontal line at y = 0
+    geom_hline(yintercept = 0, linetype = "dashed", color = "black") +
+    # add the corresponding main effect as a horizontal line with dataset main_effect_dat
+    geom_hline(data = main_effect_dat[main_effect_dat$Attribute == i, ], aes(yintercept = Coef), linetype = "dashed", color = "red") +
+    # add the coefficient values and 95% CI (show 2 digits) and "Times New Roman" font
+    # geom_text(aes(label = paste0(Coef, " (", lwb, ", ", upb, ")")), size = 25, family = "Times New Roman", hjust = 0, vjust = 0) +
+    # geom_text(aes(x = Characteristic, label = sprintf("%.2f [%.2f, %.2f]", Coef, lwb, upb)), family = "Times New Roman", size = 25, hjust = 20) +
+    # no x title and y title
+    xlab("") + ylab("") + 
+    theme(
+      # no major grid lines and no minor tick marks but reserve y axis
+      panel.grid.major = element_blank(),
+      panel.grid.minor = element_blank(),
+      axis.ticks.y = element_blank(),      
+      # text font using Times New Roman, and text font size is 100
+      text = element_text(family = "Times New Roman", size = 100),
+      # the text colour is black
+      axis.text = element_text(color = "black"),
+      # no legend
+      legend.position = "none",
+      # background color is white
+      panel.background = element_rect(fill = "white")
+    )
+  # print(p)
+  # save the plot as eps file
+  ggsave(paste0("Figure/ML_interaction_effects_", i, ".eps"), width = 40, height = 30, dpi = 300, units = "in", device = "eps")
+  #ggsave(paste0("Figure/ML_interaction_effects_", i, ".eps"), width = 40, height = 30, dpi = 300, units = "in", device = "eps")
+}
+
+
+```
+
+### 2.5 Predict the uptake percentage using the extended model
+
+```{r prediction using the extended model}
+sink(file = "Result/Prediction.txt", type = "output")
+
+load(file = "Model/ML_interaction_preference_space.RData")
+
+database <- read.csv(file = "Data/database.csv")
+
+database <- database[1:1440, ] # for testing
+
+socio_dat <- read.csv(file = "Data/socio_dat.csv")
+database <- database %>%
+  select(ID, price.1, risk2.1, risk3.1, duration2.1, duration3.1, efficacy2.1, efficacy3.1, admin.1, doses2.1, doses3.1, origin.1, price.2, risk2.2, risk3.2, duration2.2, duration3.2, efficacy2.2, efficacy3.2, admin.2, doses2.2, doses3.2, origin.2, choice) %>%
+  left_join(socio_dat, by = "ID")
+
+
+### Use the estimated model to make predictions: Remember to rerun the model component so that this function can read the utility function
+apollo_inputs = apollo_validateInputs()
+
+
+# Predict the uptake probability for a specific vaccine
+
+Predict_uptake_rate = function(database, vaccine = list(price = c("0", "200", "400", "600"), risk = c("0", "1/100,000", "1/1,000,000"), duration = c("6 months", "12 months", "Life long"), efficacy = c("50%", "70%", "90%"), admin = c("Injection", "Oral"), doses = c("1 dose", "2 doses", "3 doses"), origin = c("USA", "EU", "China")), fit, apollo_probabilities, apollo_inputs, Resampling_times = 3){
+  database <- database %>%
+  mutate(
+    price.1 = as.numeric(vaccine$price),
+    risk2.1 = ifelse(vaccine$risk == "1/1,000,000", 1, 0),
+    risk3.1 = ifelse(vaccine$risk == "1/100,000", 1, 0),
+    duration2.1 = ifelse(vaccine$duration == "12 months", 1, 0),
+    duration3.1 = ifelse(vaccine$duration == "Life long", 1, 0),
+    efficacy2.1 = ifelse(vaccine$efficacy == "70%", 1, 0),
+    efficacy3.1 = ifelse(vaccine$efficacy == "90%", 1, 0),
+    admin.1 = ifelse(vaccine$admin == "Oral", 1, 0),
+    doses2.1 = ifelse(vaccine$doses == "2 doses", 1, 0),
+    doses3.1 = ifelse(vaccine$doses == "3 doses", 1, 0),
+    origin2.1 = ifelse(vaccine$origin == "Imported", 1, 0),
+    
+    price.2 = as.numeric(vaccine$price),
+    risk2.2 = ifelse(vaccine$risk == "1/1,000,000", 1, 0),
+    risk3.2 = ifelse(vaccine$risk == "1/100,000", 1, 0),
+    duration2.2 = ifelse(vaccine$duration == "12 months", 1, 0),
+    duration3.2 = ifelse(vaccine$duration == "Life long", 1, 0),
+    efficacy2.2 = ifelse(vaccine$efficacy == "70%", 1, 0),
+    efficacy3.2 = ifelse(vaccine$efficacy == "90%", 1, 0),
+    admin.2 = ifelse(vaccine$admin == "Oral", 1, 0),
+    doses2.2 = ifelse(vaccine$doses == "2 doses", 1, 0),
+    doses3.2 = ifelse(vaccine$doses == "3 doses", 1, 0),
+    origin2 = ifelse(vaccine$origin == "Imported", 1, 0),
+  )
+  
+  apollo_inputs = apollo_validateInputs(database = database)
+  predictions_new = apollo_prediction(fit, apollo_probabilities, apollo_inputs, prediction_settings=list(runs=Resampling_times))
+  predictions_new = predictions_new[["at_estimates"]] %>%
+    mutate(
+      uptake_rate = 2*alt2,
+      opt_out = alt3
+    )
+  return(predictions_new)
+}
+
+# Preparation for figure 2 ----
+
+sink(file = "Prediction for various attributes.txt", type = "output")
+
+# 0. baseline vaccine
+predictions_baseline = Predict_uptake_rate(database, vaccine = list(price = "0", risk = "0", duration = "6 months", efficacy = "50%", admin = "Injection", doses = "1 dose", origin = "Domestic"), fit, apollo_probabilities, apollo_inputs)
+mean(predictions_baseline$uptake_rate)
+
+# 1. price up vaccine
+predictions_price_1 = Predict_uptake_rate(database, vaccine = list(price = "200", risk = "0", duration = "6 months", efficacy = "50%", admin = "Injection", doses = "1 dose", origin = "Domestic"), fit, apollo_probabilities, apollo_inputs)
+mean(predictions_price_1$uptake_rate)
+
+predictions_price_2 = Predict_uptake_rate(database, vaccine = list(price = "400", risk = "0", duration = "6 months", efficacy = "50%", admin = "Injection", doses = "1 dose", origin = "Domestic"), fit, apollo_probabilities, apollo_inputs)
+mean(predictions_price_2$uptake_rate)
+
+predictions_price_3 = Predict_uptake_rate(database, vaccine = list(price = "600", risk = "0", duration = "6 months", efficacy = "50%", admin = "Injection", doses = "1 doses", origin = "Domestic"), fit, apollo_probabilities, apollo_inputs)
+mean(predictions_price_3$uptake_rate)
+
+# 2. high risk vaccine
+predictions_risk_1 = Predict_uptake_rate(database, vaccine = list(price = "0", risk = "1/1,000,000", duration = "6 months", efficacy = "50%", admin = "Injection", doses = "1 doses", origin = "Domestic"), fit, apollo_probabilities, apollo_inputs)
+mean(predictions_risk_1$uptake_rate)
+
+predictions_risk_2 = Predict_uptake_rate(database, vaccine = list(price = "0", risk = "1/100,000", duration = "6 months", efficacy = "50%", admin = "Injection", doses = "1 doses", origin = "Domestic"), fit, apollo_probabilities, apollo_inputs)
+mean(predictions_risk_2$uptake_rate)
+
+# 3. long protection duration vaccine
+predictions_duration_1 = Predict_uptake_rate(database, vaccine = list(price = "0", risk = "0", duration = "12 months", efficacy = "50%", admin = "Injection", doses = "1 dose", origin = "Domestic"), fit, apollo_probabilities, apollo_inputs)
+mean(predictions_duration_1$uptake_rate)
+
+predictions_duration_2 = Predict_uptake_rate(database, vaccine = list(price = "0", risk = "0", duration = "Life long", efficacy = "50%", admin = "Injection", doses = "1 dose", origin = "Domestic"), fit, apollo_probabilities, apollo_inputs)
+mean(predictions_duration_2$uptake_rate)
+
+
+# 4. high efficacy vaccine
+predictions_efficacy_1 = Predict_uptake_rate(database, vaccine = list(price = "0", risk = "0", duration = "6 months", efficacy = "70%", admin = "Injection", doses = "1 dose", origin = "Domestic"), fit, apollo_probabilities, apollo_inputs)
+mean(predictions_efficacy_1$uptake_rate)
+
+predictions_efficacy_2 = Predict_uptake_rate(database, vaccine = list(price = "0", risk = "0", duration = "6 months", efficacy = "90%", admin = "Injection", doses = "1 dose", origin = "Domestic"), fit, apollo_probabilities, apollo_inputs)
+mean(predictions_efficacy_2$uptake_rate)
+
+# 5. oral vaccine
+predictions_oral_1 = Predict_uptake_rate(database, vaccine = list(price = "0", risk = "0", duration = "6 months", efficacy = "50%", admin = "Oral", doses = "1 dose", origin = "Domestic"), fit, apollo_probabilities, apollo_inputs)
+mean(predictions_oral_1$uptake_rate)
+
+# 6. many doses vaccine
+predictions_dose_1 = Predict_uptake_rate(database, vaccine = list(price = "0", risk = "0", duration = "6 months", efficacy = "50%", admin = "Injection", doses = "2 doses", origin = "Domestic"), fit, apollo_probabilities, apollo_inputs)
+mean(predictions_dose_1$uptake_rate)
+
+predictions_dose_2 = Predict_uptake_rate(database, vaccine = list(price = "0", risk = "0", duration = "6 months", efficacy = "50%", admin = "Injection", doses = "3 doses", origin = "Domestic"), fit, apollo_probabilities, apollo_inputs)
+mean(predictions_dose_2$uptake_rate)
+
+# 7. imported vaccine
+predictions_imported_1 = Predict_uptake_rate(database, vaccine = list(price = "0", risk = "0", duration = "6 months", efficacy = "50%", admin = "Injection", doses = "1 dose", origin = "Imported"), fit, apollo_probabilities, apollo_inputs)
+mean(predictions_imported_1$uptake_rate)
+
+# Preparation for figure 2 ----
+
+vaccine_price = seq(0, 1000, 100)
+uptake_rate = c()
+for (price in vaccine_price) {
+  predictions_price = Predict_uptake_rate(database, vaccine = list(price = as.character(price), risk = "0", duration = "6 months", efficacy = "50%", admin = "Injection", doses = "1 dose", origin = "Domestic"), fit, apollo_probabilities, apollo_inputs)
+  uptake_rate = append(uptake_rate, mean(predictions_price$uptake_rate))
+}
+
+sink()
+
+# Preparation for figure 4 ----
+sink("Prediction for various vaccine.txt", type = "output")
+
+# 1. best vaccine: Now set up a safe and effective scenario and see the expected uptake probability
+vaccine1 = list(price = "0", risk = "0", duration = "Life long", efficacy = "90%", admin = "Injection", doses = "1 doses", origin = "Domestic")
+predictions_best <- Predict_uptake_rate(database, vaccine = vaccine1, fit, apollo_probabilities, apollo_inputs)
+mean(predictions_best$uptake_rate)
+
+# 2. worst vaccine: Now set up a unsafe and ineffective scenario and see the expected uptake probability
+vaccine2 = list(price = "800", risk = "1/100,000", duration = "6 months", efficacy = "50%", admin = "Oral", doses = "3 doses", origin = "Imported")
+predictions_worst <- Predict_uptake_rate(database, vaccine = vaccine2, fit, apollo_probabilities, apollo_inputs)
+mean(predictions_worst$uptake_rate)
+
+# 3. Beijing KeXing
+vaccine_Kexing = list(price = "600", risk = "1/1,000,000", duration = "6 months", efficacy = "50%", admin = "Injection", doses = "2 doses", origin = "Domestic")
+predictions_Kexing <- Predict_uptake_rate(database, vaccine = vaccine_Kexing, fit, apollo_probabilities, apollo_inputs)
+mean(predictions_Kexing$uptake_rate)
+
+# 4. Wuhan Shengwu
+vaccine_Shengwu = list(price = "0", risk = "1/1,000,000", duration = "6 months", efficacy = "70%", admin = "Injection", doses = "2 doses", origin = "Domestic")
+predictions_Shengwu <- Predict_uptake_rate(database, vaccine = vaccine_Shengwu, fit, apollo_probabilities, apollo_inputs)
+mean(predictions_Shengwu$uptake_rate)
+
+sink()
+save(predictions_base, predictions_best, predictions_worst, file = paste0(getwd(), "/Model/Prediction.RData"))
+
+```
+
+### 2.6 Figure 2: Attribute importance - Change in uptake probability
+
+```{r takeup rates changed with vaccine attributes}
+library(ggplot2)
+library(showtext)
+
+dat <- read.csv("Result/change_probability.csv")
+dat <- dat %>%
+  mutate(
+    sigh = ifelse(Change.in.probability>0, "Up", "Down")
+  )
+
+# determine the fonts
+showtext_auto()
+
+barfig <- ggplot(dat, aes(x = factor(Attribute, levels = unique(Attribute)), y = Change.in.probability, fill = as.factor(Attribute.label))) +
+  geom_bar(stat = "identity", position=position_dodge(0.9), width = 0.8, alpha = 0.5) +
+  geom_hline(yintercept = 0, color = "black") +
+  geom_text(                                                  # 在图形上加上数字标签
+    aes(label= sprintf("%.2f", Change.in.probability),                         # 标签的值（数据框的第三列）
+        hjust = ifelse(sigh == "Up", -0.4, 1.1)           # 水平位置
+        ),
+    size = 8,
+    family = "Times New Roman") +
+  coord_flip(ylim = c(min(0, dat$Change.in.probability), max(0, dat$Change.in.probability))) +
+  scale_y_continuous(expand = expansion(mult = c(0.5, 0.5))) +
+  labs(x = "", y = "Change in uptake rate (%)") +
+  theme_classic() +
+  theme(
+    axis.title.x = element_text(family = "Times New Roman", size = 30, colour = "black", margin = margin(t = 30)),
+    axis.text = element_text(family = "Times New Roman", size = 24, colour = "black"),
+    legend.position = "none" # 去掉图例
+  )
+
+
+print(barfig)
+ggsave(filename = "Figure/barfig.eps", barfig, width = 20, height = 15, dpi = 300, units = "in", device='eps')
+
+```
+
+### 2.7 Figure 3: Uptake rate versus vaccine price
+
+```{r draw line plot}
+rm(list = ls())
+library(ggplot2)
+library(ggrepel)
+library(plyr)
+load("Result/Prediction_price.RData")
+
+vec_vaccine_price <- seq(0, 1000, 100)
+vec_uptake_rate <- sapply(list_predictions_price, function(x) mean(x[, c("uptake_rate")]))
+dat <- data.frame(vaccine_price = vec_vaccine_price, uptake_rate = vec_uptake_rate)
+
+socio_dat <- read.csv(file = "Data/socio_dat.csv")
+socio_dat <- socio_dat %>%
+  mutate(
+    sex = ifelse(gender_2l == 0, "Male", "Female"),
+    agegp = case_when(
+      age_high == 0 & age_mid == 0 ~ "18-39 yrs",
+      age_high == 0 & age_mid == 1 ~ "40-59 yrs",
+      age_high == 1 & age_mid == 0 ~ "60+ yrs"
+    ),
+    educationgp = case_when(
+      education_high == 0 & education_mid == 0 ~ "Primary school or less",
+      education_high == 0 & education_mid == 1 ~ "Middle and high school",
+      education_high == 1 & education_mid == 0 ~ "College and above"
+    )
+  ) %>%
+  dplyr::select(ID, sex, agegp, educationgp) %>%
+  mutate(
+    sex = as.factor(sex),
+    agegp = as.factor(agegp),
+    educationgp = as.factor(educationgp)
+  )
+
+list_predictions_price_socio <- lapply(list_predictions_price, function(x) left_join(x, socio_dat, by = "ID"))
+list_uptake_sex <- lapply(list_predictions_price_socio, function(x) aggregate(uptake_rate~sex, x, mean))
+dat_uptake_sex <- do.call(rbind.fill, list_uptake_sex)
+dat_uptake_sex$vaccine_price = rep(vec_vaccine_price, each = 2)
+
+list_uptake_agegp <- lapply(list_predictions_price_socio, function(x) aggregate(uptake_rate~agegp, x, mean))
+dat_uptake_agegp <- do.call(rbind.fill, list_uptake_agegp)
+dat_uptake_agegp$vaccine_price = rep(vec_vaccine_price, each = 3)
+
+list_uptake_educationgp <- lapply(list_predictions_price_socio, function(x) aggregate(uptake_rate~educationgp, x, mean))
+dat_uptake_educationgp <- do.call(rbind.fill, list_uptake_educationgp)
+dat_uptake_educationgp$vaccine_price = rep(vec_vaccine_price, each = 3)
+
+# overall ----
+# determine the fonts
+showtext_auto()
+
+linefig <- ggplot(data = dat, aes(x = vaccine_price, y = uptake_rate*100)) +
+  geom_line(aes(colour = "blue"), size = 2, stat = "identity") + 
+  geom_point() +
+  # geom_text_repel(                                                  # 在图形上加上数字标签
+  #   aes(label= sprintf("%.1f", uptake_rate*100),                         # 标签的值（数据框的第三列）
+  #       vjust = -1           # 竖直位置
+  #       ),
+  #   size = 8,
+  #   family = "Times New Roman") +
+  scale_fill_manual(values = "black") + # 自定义点的颜色
+  scale_color_manual(values = "steelblue") + # 自定义线的颜色
+  scale_y_continuous(limits = c(60, 100), breaks = seq(60, 100, 5)) +
+  scale_x_continuous(breaks = seq(0,1000,100)) +
+  labs(x = "Vaccine price (RMB)", y = "Predicted uptake probability (%)") +
+  theme_classic() +
+  theme(
+    axis.title = element_text(family = "Times New Roman", size = 30, colour = "black"),
+    axis.title.x = element_text(margin = margin(t = 30)),
+    axis.text = element_text(family = "Times New Roman", size = 24, colour = "black"),
+    legend.position = "none" # 去掉图例
+  )
+
+print(linefig)
+ggsave(filename = "Figure/linefig.eps", linefig, width = 16, height = 9, dpi = 300, units = "in", device='eps')
+
+# by sex ----
+
+linefig <- ggplot(data = dat_uptake_sex, aes(x = vaccine_price, y = uptake_rate*100, group = sex)) +
+  geom_line(aes(colour = sex), size = 2, stat = "identity") + 
+  geom_point() +
+  # geom_text_repel(                                                  # 在图形上加上数字标签
+  #   aes(label= sprintf("%.1f", uptake_rate*100),                         # 标签的值（数据框的第三列）
+  #       vjust = ifelse(sex == "Male", 1.5, -1)           # 竖直位置
+  #       ),
+  #   size = 8,
+  #   family = "Times New Roman") +
+  # scale_fill_manual(values = "black") + # 自定义点的颜色
+  # scale_color_manual(values = "steelblue") + # 自定义线的颜色
+  
+  scale_y_continuous(limits = c(60, 100), breaks = seq(60, 100, 5)) +
+  scale_x_continuous(breaks = seq(0, 1000, 100)) +
+  labs(x = "Vaccine price (RMB)", y = "Predicted uptake probability (%)", color = "Sex") +
+  theme_classic() +
+  theme(
+    axis.title = element_text(family = "Times New Roman", size = 30, colour = "black"),
+    axis.title.x = element_text(margin = margin(t = 30)),
+    axis.text = element_text(family = "Times New Roman", size = 24, colour = "black"),
+    legend.text = element_text(family = "Times New Roman", size = 24, colour = "black"),
+    legend.title = element_text(family = "Times New Roman", size = 28, colour = "black"),
+    legend.position = c(0.9, 0.5)
+#    legend.position = "none" # 去掉图例
+  )
+
+print(linefig)
+ggsave(filename = "Figure/linefig_by_sex.eps", linefig, width = 16, height = 9, dpi = 300, units = "in", device='eps')
+
+# by age group ----
+
+linefig <- ggplot(data = dat_uptake_agegp, aes(x = vaccine_price, y = uptake_rate*100, group = agegp)) +
+  geom_line(aes(colour = agegp), size = 2, stat = "identity") + 
+  geom_point() +
+  # geom_text_repel(                                                  # 在图形上加上数字标签
+  #   aes(label= sprintf("%.1f", uptake_rate*100)                         # 标签的值（数据框的第三列）
+  #       # vjust = case_when(agegp == "18-39 yrs" ~ 1.5,
+  #       #                   agegp == "40-59 yrs" ~ 3.5,
+  #       #                   agegp == "60+ yrs" ~ -1)           # 竖直位置
+  #       ),
+  #   size = 8,
+  #   family = "Times New Roman") +
+  # scale_fill_manual(values = "black") + # 自定义点的颜色
+  # scale_color_manual(values = "steelblue") + # 自定义线的颜色
+  scale_y_continuous(limits = c(60, 100), breaks = seq(60, 100, 5)) +
+  scale_x_continuous(breaks = seq(0, 1000, 100)) +
+  labs(x = "Vaccine price (RMB)", y = "Predicted uptake probability (%)", color = "Age group") +
+  theme_classic() +
+  theme(
+    axis.title = element_text(family = "Times New Roman", size = 30, colour = "black"),
+    axis.title.x = element_text(margin = margin(t = 30)),
+    axis.text = element_text(family = "Times New Roman", size = 24, colour = "black"),
+    legend.text = element_text(family = "Times New Roman", size = 24, colour = "black"),
+    legend.title = element_text(family = "Times New Roman", size = 28, colour = "black"),
+    legend.position = c(0.9, 0.5)
+#    legend.position = "none" # 去掉图例
+  )
+
+print(linefig)
+ggsave(filename = "Figure/linefig_by_agegp.eps", linefig, width = 16, height = 9, dpi = 300, units = "in", device='eps')
+
+# by education group ----
+
+linefig <- ggplot(data = dat_uptake_educationgp, aes(x = vaccine_price, y = uptake_rate*100, group = educationgp)) +
+  geom_line(aes(colour = educationgp), size = 2, stat = "identity") + 
+  geom_point() +
+  # geom_text_repel(                                                  # 在图形上加上数字标签
+  #   aes(label= sprintf("%.1f", uptake_rate*100),                         # 标签的值（数据框的第三列）
+  #       vjust = case_when(educationgp == "Primary school or less" ~ 1.5,
+  #                         educationgp == "College and above" ~ 1.5,
+  #                         educationgp == "Middle and high school" ~ -1)           # 竖直位置
+  #       ),
+  #   size = 8,
+  #   family = "Times New Roman") +
+  # scale_fill_manual(values = "black") + # 自定义点的颜色
+  # scale_color_manual(values = "steelblue") + # 自定义线的颜色
+  scale_y_continuous(limits = c(60, 100), breaks = seq(60, 100, 5)) +
+  scale_x_continuous(breaks = seq(0, 1000, 100)) +
+  labs(x = "Vaccine price (RMB)", y = "Predicted uptake probability (%)", color = "Education level") +
+  theme_classic() +
+  theme(
+    axis.title = element_text(family = "Times New Roman", size = 30, colour = "black"),
+    axis.title.x = element_text(margin = margin(t = 20)),
+    axis.text = element_text(family = "Times New Roman", size = 24, colour = "black"),
+    legend.text = element_text(family = "Times New Roman", size = 24, colour = "black"),
+    legend.title = element_text(family = "Times New Roman", size = 28, colour = "black"),
+    legend.key.size = unit(1, "cm"), # size of legend keys
+    legend.position = c(0.85, 0.5)
+#    legend.position = "none" # 去掉图例
+  )
+
+print(linefig)
+ggsave(filename = "Figure/linefig_by_educationgp.eps", linefig, width = 16, height = 9, dpi = 300, units = "in", device='eps')
+
+```
+
+### 2.8 Figure 4: Uptake rate for different vaccine across provinces
+
+
+```{r draw maps}
+# rm(list = ls())
+# # determine the fonts
+# showtext_auto()
+# library(sf)
+# load("Result/Prediction_Kexing_price.RData")
+# socio_dat <- read.csv(file = "Data/socio_dat.csv")
+# socio_dat <- socio_dat %>%
+#   select(ID, province_31l)
+
+# vaccine_price = c(0, 100, 200, 400, 600)
+# list_predictions_price = list(predictions_Kexing_0, predictions_Kexing_100, predictions_Kexing_200, predictions_Kexing_400, predictions_Kexing_600)
+# list_predictions_price_socio <- lapply(list_predictions_price, function(x) left_join(x, socio_dat, by = "ID"))
+# list_uptake_province <- lapply(list_predictions_price_socio, function(x) aggregate(uptake_rate~province_31l, x, mean))
+
+
+# for (i in 1:length(list_predictions_price)) {
+#   map_data <- import("Data/Mapdata/Chinamap_data.xlsx")
+#   map_data$province_31l = c(1:nrow(map_data))
+#   map_data <- list_uptake_province[[i]] %>%
+#     right_join(map_data, by = "province_31l")
+  
+#   China <- st_read(dsn = "Data/Mapdata/china.json",stringsAsFactors = FALSE)
+
+#   # check whether the data contains the projecting information
+#   # st_crs(China) # NA means no such information; need to attach manually
+#   # China <- st_set_crs(China, 4326)
+#   China <- st_transform(China, "+init=epsg:4508")
+  
+  
+#   data_merge <- China %>%
+#     left_join(map_data, by = "adcode")
+  
+#   # determine the fonts
+#   windowsFonts(myFont = windowsFont("Times New Roman"))
+  
+#   map<-ggplot() + # 底图
+#     geom_sf(data = data_merge, aes(fill = uptake_rate*100)) + # 省域
+#     coord_sf() +  # 投影方式
+#     scale_fill_distiller(name = "Uptake(%)", palette = "RdYlGn", direction = 1, limits=c(50,100)) +
+#     theme(
+#       legend.text = element_text(family = "Times New Roman", size = 15),
+#       legend.title = element_text(family = "Times New Roman", size = 20),
+#       panel.grid.major =  element_blank(), 
+#       panel.grid.minor = element_blank(),
+#       panel.background = element_blank(),
+#       axis.line = element_blank(),
+#       axis.text = element_blank(),
+#       axis.ticks = element_blank())
+  
+#   print(map)
+#   ggsave(filename = paste0("Figure/Sinovac_", vaccine_price[i], "_Map.eps"), map, width = 10.5, height = 10, dpi = 300, units = "in", device='eps')
+# }
+```
+
+## 3. Subgroup analysis by province
+
+```{r Basic ML model for samples in each province}
+for (i in 1:31) {
+  # use apollo package to analyze
+  # ####################################################### #
+  #### 1. Definition of core settings
+  # ####################################################### #
+  ### Clear memory
+  # rm(list = ls())
+  
+  ### Load library
+  library(apollo)
+  
+  ### Initialise code
+  apollo_initialise()
+  
+  ### Set core controls
+  apollo_control <- list(
+    modelName = "Mixed logit model",
+    modelDescr = "Mixed logit model to determine Adults' preferences for a vaccine product",
+    indivID = "ID",
+    mixing = TRUE, # mixed logit model for random coefficients, FALSE for MNL model
+    nCores = 6
+    #,weights = "weight"
+  )
+  # ####################################################### #
+  #### 2. Data loading                                   ####
+  # ####################################################### #
+  database <- read.csv(file = "Data/database.csv")
+  socio_dat <- read.csv(file = "Data/socio_dat.csv")
+  database <- database %>%
+    select(ID, price.1, risk2.1, risk3.1, duration2.1, duration3.1, efficacy2.1, efficacy3.1, admin.1, doses2.1, doses3.1, origin.1, price.2, risk2.2, risk3.2, duration2.2, duration3.2, efficacy2.2, efficacy3.2, admin.2, doses2.2, doses3.2, origin.2, choice) %>%
+    left_join(socio_dat, by = "ID") %>%
+    dplyr::filter(province_31l == i)
+  
+  database <- as.data.frame(database)
+  
+  # ####################################################### #
+  #### 3. Parameter definition                           ####
+  # ####################################################### #
+  
+  ### Vector of parameters, including any that are kept fixed
+  ### during estimation
+  
+  apollo_beta <- c(
+    asc = 0,
+    asc_loc = 0, # ASC: location parameter, accounting for the left to right bias
+    b_price_mu = 0,
+    b_risk2_mu = 0,
+    b_risk3_mu = 0,
+    b_duration2_mu = 0,
+    b_duration3_mu = 0,
+    b_efficacy2_mu = 0,
+    b_efficacy3_mu = 0,
+    b_oral_mu = 0,
+    b_dose2_mu = 0,
+    b_dose3_mu = 0,
+    b_imported_mu = 0,
+    b_price_sigma = 0,
+    b_risk2_sigma = 0,
+    b_risk3_sigma = 0,
+    b_duration2_sigma = 0,
+    b_duration3_sigma = 0,
+    b_efficacy2_sigma = 0,
+    b_efficacy3_sigma = 0,
+    b_oral_sigma = 0,
+    b_dose2_sigma = 0,
+    b_dose3_sigma = 0,
+    b_imported_sigma = 0
+  )
+  
+  ### Vector with names (in quotes) of parameters to be kept fixed at their starting value in apollo_beta, use apollo_beta_fixed = c() if none
+  apollo_fixed <- c()
+  
+  # ################################################################# #
+  #### 4. Define Random Components                                    ####
+  # ################################################################# #
+  
+  ### Set parameters for generating draws
+  apollo_draws <- list(
+    interDrawsType = "mlhs",
+    interNDraws = 500,
+    interUnifDraws = c(),
+    interNormDraws = paste0("draws_", c(
+      "price", "risk2",
+      "risk3", "duration2",
+      "duration3", "efficacy2",
+      "efficacy3", "oral",
+      "dose2", "dose3",
+      "imported"
+    )),
+    intraDrawsType = "",
+    intraNDraws = 0,
+    intraUnifDraws = c(),
+    intraNormDraws = c()
+  )
+  
+  ### Create random parameters
+  apollo_randCoeff <- function(apollo_beta, apollo_inputs) {
+    randcoeff <- list()
+  
+    randcoeff[["b_price"]] <- b_price_mu + b_price_sigma * draws_price
+    randcoeff[["b_risk2"]] <- b_risk2_mu + b_risk2_sigma * draws_risk2
+    randcoeff[["b_risk3"]] <- b_risk3_mu + b_risk3_sigma * draws_risk3
+    randcoeff[["b_duration2"]] <- b_duration2_mu + b_duration2_sigma * draws_duration2
+    randcoeff[["b_duration3"]] <- b_duration3_mu + b_duration3_sigma * draws_duration3
+    randcoeff[["b_efficacy2"]] <- b_efficacy2_mu + b_efficacy2_sigma * draws_efficacy2
+    randcoeff[["b_efficacy3"]] <- b_efficacy3_mu + b_efficacy3_sigma * draws_efficacy3
+    randcoeff[["b_oral"]] <- b_oral_mu + b_oral_sigma * draws_oral
+    randcoeff[["b_dose2"]] <- b_dose2_mu + b_dose2_sigma * draws_dose2
+    randcoeff[["b_dose3"]] <- b_dose3_mu + b_dose3_sigma * draws_dose3
+    randcoeff[["b_imported"]] <- b_imported_mu + b_imported_sigma * draws_imported
+  
+    return(randcoeff)
+  }
+  
+  # ####################################################### #
+  #### 5. Input validation                               ####
+  # ####################################################### #
+  
+  apollo_inputs <- apollo_validateInputs()
+  
+  # ####################################################### #
+  #### 6. Likelihood definition                          ####
+  # ####################################################### #
+  
+  apollo_probabilities <- function(apollo_beta, apollo_inputs, functionality = "estimate") {
+    ### Attach inputs and detach after function exit
+    apollo_attach(apollo_beta, apollo_inputs)
+    on.exit(apollo_detach(apollo_beta, apollo_inputs))
+  
+    ### Create list of probabilities P
+    P <- list()
+  
+    V <- list()
+  
+    ### List of utilities: these must use the same names as
+    ### in mnl_settings, order is irrelevant.
+    V[["alt1"]] <- asc + asc_loc + b_price * price.1 + b_risk2 * risk2.1 + b_risk3 * risk3.1 +
+      b_duration2 * duration2.1 + b_duration3 * duration3.1 + b_efficacy2 * efficacy2.1 +
+      b_efficacy3 * efficacy3.1 + b_oral * admin.1 + b_dose2 * doses2.1 +
+      b_dose3 * doses3.1 + b_imported * origin.1
+    V[["alt2"]] <- asc + b_price * price.2 + b_risk2 * risk2.2 + b_risk3 * risk3.2 +
+      b_duration2 * duration2.2 + b_duration3 * duration3.2 + b_efficacy2 * efficacy2.2 +
+      b_efficacy3 * efficacy3.2 + b_oral * admin.2 + b_dose2 * doses2.2 +
+      b_dose3 * doses3.2 + b_imported * origin.2
+    V[["alt3"]] <- 0
+  
+    ### Define settings for MNL model component
+    mnl_settings <- list(
+      alternatives = c(alt1 = 1, alt2 = 2, alt3 = 3),
+      avail        = list(alt1 = 1, alt2 = 1, alt3 = 1),
+      choiceVar    = choice,
+      V            = V
+    )
+  
+    ### Compute probabilities using MNL model
+    P[["model"]] <- apollo_mnl(mnl_settings, functionality)
+  
+    ### Take product across observation for same individual
+    P = apollo_panelProd(P, apollo_inputs, functionality)
+  
+    ### Average across inter-individual draws
+    P = apollo_avgInterDraws(P, apollo_inputs, functionality)
+  
+    ### Prepare and return outputs of function
+    P = apollo_prepareProb(P, apollo_inputs, functionality)
+    
+    ### Using sampling weights in estimation and prediction
+    # P = apollo_weighting(P, apollo_inputs, functionality)
+  
+    return(P)
+  }
+  
+  # ####################################################### #
+  #### 7. Model estimation                ####
+  # ####################################################### #
+  
+  fit <- apollo_estimate(
+    apollo_beta, apollo_fixed,
+    apollo_probabilities, apollo_inputs
+  )
+  
+  save(fit, file = paste0(getwd(), "/Model/ML_province", i, ".RData"))
+}
+```
+
+We can change the levels of vaccine attribute here (Sinovac) to get the uptake rate prediction under subgroup analysis.
+
+The following code is just an example, the actual code pls refer to the `transfer` folder.
+
+```{r Calculate the uptake probability and Prepare the dataset}
+vaccine_Kexing = list(price = "0", risk = "1/1,000,000", duration = "6 months", efficacy = "50%", admin = "Injection", doses = "2 doses", origin = "Domestic")
+
+### Initialise code
+apollo_initialise()
+
+### Set core controls
+apollo_control <- list(
+  modelName = "Mixed logit model",
+  modelDescr = "Mixed logit model to determine Adults' preferences for a vaccine product",
+  indivID = "ID",
+  mixing = TRUE, # mixed logit model for random coefficients, FALSE for MNL model
+  nCores = 6
+  #,weights = "weight"
+)
+
 # ####################################################### #
-#### 7. Report result                ####
+#### 2. Parameter definition                           ####
 # ####################################################### #
-FormatResult_ML <- function(apollo_model, df=143998){
+
+### Vector of parameters, including any that are kept fixed
+### during estimation
+
+apollo_beta <- c(
+  asc = 0,
+  asc_loc = 0, # ASC: location parameter, accounting for the left to right bias
+  b_price_mu = 0,
+  b_risk2_mu = 0,
+  b_risk3_mu = 0,
+  b_duration2_mu = 0,
+  b_duration3_mu = 0,
+  b_efficacy2_mu = 0,
+  b_efficacy3_mu = 0,
+  b_oral_mu = 0,
+  b_dose2_mu = 0,
+  b_dose3_mu = 0,
+  b_imported_mu = 0,
+  b_price_sigma = 0,
+  b_risk2_sigma = 0,
+  b_risk3_sigma = 0,
+  b_duration2_sigma = 0,
+  b_duration3_sigma = 0,
+  b_efficacy2_sigma = 0,
+  b_efficacy3_sigma = 0,
+  b_oral_sigma = 0,
+  b_dose2_sigma = 0,
+  b_dose3_sigma = 0,
+  b_imported_sigma = 0
+)
+
+### Vector with names (in quotes) of parameters to be kept fixed at their starting value in apollo_beta, use apollo_beta_fixed = c() if none
+apollo_fixed <- c()
+
+# ################################################################# #
+#### 3. Define Random Components                                    ####
+# ################################################################# #
+
+### Set parameters for generating draws
+apollo_draws <- list(
+  interDrawsType = "mlhs",
+  interNDraws = 500,
+  interUnifDraws = c(),
+  interNormDraws = paste0("draws_", c(
+    "price", "risk2",
+    "risk3", "duration2",
+    "duration3", "efficacy2",
+    "efficacy3", "oral",
+    "dose2", "dose3",
+    "imported"
+  )),
+  intraDrawsType = "",
+  intraNDraws = 0,
+  intraUnifDraws = c(),
+  intraNormDraws = c()
+)
+
+### Create random parameters
+apollo_randCoeff <- function(apollo_beta, apollo_inputs) {
+  randcoeff <- list()
+
+  randcoeff[["b_price"]] <- b_price_mu + b_price_sigma * draws_price
+  randcoeff[["b_risk2"]] <- b_risk2_mu + b_risk2_sigma * draws_risk2
+  randcoeff[["b_risk3"]] <- b_risk3_mu + b_risk3_sigma * draws_risk3
+  randcoeff[["b_duration2"]] <- b_duration2_mu + b_duration2_sigma * draws_duration2
+  randcoeff[["b_duration3"]] <- b_duration3_mu + b_duration3_sigma * draws_duration3
+  randcoeff[["b_efficacy2"]] <- b_efficacy2_mu + b_efficacy2_sigma * draws_efficacy2
+  randcoeff[["b_efficacy3"]] <- b_efficacy3_mu + b_efficacy3_sigma * draws_efficacy3
+  randcoeff[["b_oral"]] <- b_oral_mu + b_oral_sigma * draws_oral
+  randcoeff[["b_dose2"]] <- b_dose2_mu + b_dose2_sigma * draws_dose2
+  randcoeff[["b_dose3"]] <- b_dose3_mu + b_dose3_sigma * draws_dose3
+  randcoeff[["b_imported"]] <- b_imported_mu + b_imported_sigma * draws_imported
+
+  return(randcoeff)
+}
+
+# ####################################################### #
+#### 4. Probabilities                               ####
+# ####################################################### #
+
+apollo_probabilities <- function(apollo_beta, apollo_inputs, functionality = "estimate") {
+  ### Attach inputs and detach after function exit
+  apollo_attach(apollo_beta, apollo_inputs)
+  on.exit(apollo_detach(apollo_beta, apollo_inputs))
+
+  ### Create list of probabilities P
+  P <- list()
+
+  V <- list()
+
+  ### List of utilities: these must use the same names as
+  ### in mnl_settings, order is irrelevant.
+  V[["alt1"]] <- asc + b_price * price.2 + b_risk2 * risk2.2 + b_risk3 * risk3.2 +
+    b_duration2 * duration2.2 + b_duration3 * duration3.2 + b_efficacy2 * efficacy2.2 +
+    b_efficacy3 * efficacy3.2 + b_oral * admin.2 + b_dose2 * doses2.2 +
+    b_dose3 * doses3.2 + b_imported * origin.2
+  V[["alt2"]] <- 0
+
+  ### Define settings for MNL model component
+  mnl_settings <- list(
+    alternatives = c(alt1 = 1, alt2 = 2),
+    avail        = list(alt1 = 1, alt2 = 1),
+    choiceVar    = choice,
+    V            = V
+  )
+
+  ### Compute probabilities using MNL model
+  P[["model"]] <- apollo_mnl(mnl_settings, functionality)
+
+  ### Take product across observation for same individual
+  P = apollo_panelProd(P, apollo_inputs, functionality)
+
+  ### Average across inter-individual draws
+  P = apollo_avgInterDraws(P, apollo_inputs, functionality)
+
+  ### Prepare and return outputs of function
+  P = apollo_prepareProb(P, apollo_inputs, functionality)
+  
+  ### Using sampling weights in estimation and prediction
+  # P = apollo_weighting(P, apollo_inputs, functionality)
+
+  return(P)
+}
+
+Predict_uptake_rate = function(database, vaccine = list(price = c("0", "200", "400", "600"), risk = c("0", "1/100,000", "1/1,000,000"), duration = c("6 months", "12 months", "Life long"), efficacy = c("50%", "70%", "90%"), admin = c("Injection", "Oral"), doses = c("1 dose", "2 doses", "3 doses"), origin = c("Domestic", "Imported")), fit, apollo_probabilities, apollo_inputs, Resampling_times = 3){
+  database <- database %>%
+  mutate(
+    price.1 = as.numeric(vaccine$price),
+    risk2.1 = ifelse(vaccine$risk == "1/1,000,000", 1, 0),
+    risk3.1 = ifelse(vaccine$risk == "1/100,000", 1, 0),
+    duration2.1 = ifelse(vaccine$duration == "12 months", 1, 0),
+    duration3.1 = ifelse(vaccine$duration == "Life long", 1, 0),
+    efficacy2.1 = ifelse(vaccine$efficacy == "70%", 1, 0),
+    efficacy3.1 = ifelse(vaccine$efficacy == "90%", 1, 0),
+    admin.1 = ifelse(vaccine$admin == "Oral", 1, 0),
+    doses2.1 = ifelse(vaccine$doses == "2 doses", 1, 0),
+    doses3.1 = ifelse(vaccine$doses == "3 doses", 1, 0),
+    origin.1 = ifelse(vaccine$origin == "Imported", 1, 0),
+    price.2 = as.numeric(vaccine$price),
+    risk2.2 = ifelse(vaccine$risk == "1/1,000,000", 1, 0),
+    risk3.2 = ifelse(vaccine$risk == "1/100,000", 1, 0),
+    duration2.2 = ifelse(vaccine$duration == "12 months", 1, 0),
+    duration3.2 = ifelse(vaccine$duration == "Life long", 1, 0),
+    efficacy2.2 = ifelse(vaccine$efficacy == "70%", 1, 0),
+    efficacy3.2 = ifelse(vaccine$efficacy == "90%", 1, 0),
+    admin.2 = ifelse(vaccine$admin == "Oral", 1, 0),
+    doses2.2 = ifelse(vaccine$doses == "2 doses", 1, 0),
+    doses3.2 = ifelse(vaccine$doses == "3 doses", 1, 0),
+    origin.2 = ifelse(vaccine$origin == "Imported", 1, 0),
+  )
+  
+  apollo_inputs = apollo_validateInputs(database = database)
+  predictions_new = apollo_prediction(fit, apollo_probabilities, apollo_inputs, prediction_settings=list(runs=Resampling_times))
+  predictions_new = predictions_new[["at_estimates"]] %>%
+    mutate(
+      uptake_rate = alt1,
+      opt_out = alt2
+    )
+  return(predictions_new)
+}
+
+# ####################################################### #
+#### 5. Prediction                               ####
+# ####################################################### #
+
+temp = data.frame(province_31l = seq(1,31), `Expected uptake rate` = rep(0,31))
+
+for (i in 1:31) {
+  load(paste0(getwd(), "/Model/ML_province", i, ".RData"))
+
+  database <- read.csv(file = "Data/database.csv")
+  socio_dat <- read.csv(file = "Data/socio_dat.csv")
+  database <- database %>%
+    select(ID, price.1, risk2.1, risk3.1, duration2.1, duration3.1, efficacy2.1, efficacy3.1, admin.1, doses2.1, doses3.1, origin.1, price.2, risk2.2, risk3.2, duration2.2, duration3.2, efficacy2.2, efficacy3.2, admin.2, doses2.2, doses3.2, origin.2, choice) %>%
+    left_join(socio_dat, by = "ID") %>%
+    filter(province_31l == i)
+  
+  apollo_inputs <- apollo_validateInputs()
+  
+  predictions = Predict_uptake_rate(database, vaccine = vaccine_Kexing, fit, apollo_probabilities, apollo_inputs)
+  temp[i, "Expected uptake rate"] = mean(predictions$uptake_rate)
+}
+```
+
+#### 3.1 Figure 3: Subgroup analysis- Sinovac vaccine with different price
+
+```{r predict the take up rate for each province}
+library(gridExtra)
+
+rm(list = ls())
+load("Result/province_dat2.RData")
+
+province_dat2 %>%
+  dplyr::filter(price == 600) %>%
+  summarise(max(Expected.uptake.rate)-min(Expected.uptake.rate))
+# determine the fonts
+showtext_auto()
+vaccine_price = c(0, 200, 400, 600)
+# vaccine_price = unique(province_dat2$price)
+
+# set an empty list
+map_list = list()
+
+for (i in 1:length(vaccine_price)) {
+  map_data <- import("Data/Mapdata/Chinamap_data.xlsx")
+  map_data$province_31l = c(1:nrow(map_data))
+  map_data <- province_dat2 %>%
+    filter(price == vaccine_price[i]) %>%
+    dplyr::rename(uptake_rate = Expected.uptake.rate) %>%
+    right_join(map_data, by = "province_31l")
+  
+  #API_pre = "http://xzqh.mca.gov.cn/data/"
+  
+  China <- st_read(dsn = "Data/Mapdata/china.json",stringsAsFactors = FALSE)
+  
+  # check whether the data contains the projecting information
+  # st_crs(China) # NA means no such information; need to attach manually
+  # China <- st_set_crs(China, 4326)
+  China <- st_transform(China, "+init=epsg:4508")
+  
+  
+  data_merge <- China %>%
+    left_join(map_data, by = "adcode")
+  
+  # determine the fonts
+  windowsFonts(myFont = windowsFont("Times New Roman"))
+  
+  map<-ggplot() + # 底图
+    geom_sf(data = data_merge, aes(fill = uptake_rate*100)) + # 省域
+    coord_sf() +  # 投影方式
+    scale_fill_distiller(name = "Uptake(%)", palette = "RdYlGn", direction = 1, limits=c(40,100)) +
+    labs(caption = paste0("Price: ", vaccine_price[i], " RMB")) +
+    theme(
+      legend.text = element_text(family = "Times New Roman", size = 15),
+      legend.title = element_text(family = "Times New Roman", size = 20),
+      panel.grid.major =  element_blank(),
+      panel.grid.minor = element_blank(),
+      panel.background = element_blank(),
+      axis.line = element_blank(),
+      axis.text = element_blank(),
+      axis.ticks = element_blank(),
+      plot.caption = element_text(family="Times New Roman", size=30, hjust = 0.6))
+  
+  print(map)
+  
+  ggsave(filename = paste0("Figure/Sinovac_Subgroup_", vaccine_price[i], ".eps"), map, width = 10.5, height = 10, dpi = 300, units = "in", device='eps')
+  # map_list = append(list(map), map_list, after = 0)
+}
+
+# # arrange the plots in a 2x2 grid
+# grid <- marrangeGrob(map_list, nrow = 2, ncol = 2)
+# 
+# ggsave(filename = paste0("Figure/Sinovac_Subgroup.pdf"), grid, width = 15, height = 10, dpi = 300, units = "in", device='pdf')
+
+```
+
+We can also provide some insights into some specific provinces, to have a look at the preference parameters.
+
+#### 3.2 Summary of subgroup analysis
+
+```{r}
+result = list()
+for (i in 1:31) {
+  load(file = paste0("Model/ML_province",i,".RData"))
+  # ####################################################### #
+  #### 7. Report result                ####
+  # ####################################################### #
+  FormatResult_ML <- function(apollo_model, df=300){
+    beta_dat <- as.data.frame(apollo_modelOutput(apollo_model, list(printPVal = TRUE)))[,c(1,5,7)] %>%
+      dplyr::rename(p_value = `p(1-sided)`) %>%
+      mutate(
+        `2.5%` = Estimate + qnorm(0.025)*Rob.s.e.,
+        `97.5%` = Estimate + qnorm(0.975)*Rob.s.e.
+      ) %>%
+      dplyr::select(Estimate, `2.5%`, `97.5%`, p_value)
+    var_name <- names(coef(apollo_model))
+    beta_dat$WTP <- NA_real_
+    beta_dat$WTP_p_value <- NA_real_
+    for (i in c(1:length(var_name))) {
+      if (var_name[i]!="b_price"){
+        temp<-apollo_deltaMethod(apollo_model, deltaMethod_settings = list(operation = "ratio", 
+                                                                  parName1 = var_name[i], 
+                                                                  parName2 = "b_price_mu", 
+                                                                  multPar1 = -1))
+        beta_dat[var_name[i], "WTP"] = temp[1]
+        # one sided p value
+        beta_dat[var_name[i],"WTP_p_value"] = ifelse(temp[3]>0,2*(1-pt(temp[3],df)),2*pt(temp[3],df))
+      }
+    }
+    beta_dat <- beta_dat %>% mutate_at(vars(ends_with("p_value")), function(v) ifelse(v<1e-3,"<0.001",v))
+    return(beta_dat)
+  }
+  apollo_modelOutput(fit)
+  result_dat <- FormatResult_ML(fit)
+  result = append(result, list(result_dat))
+}
+
+sapply(result, function(x) x["b_imported_mu",])
+# result_dat_star <- result_dat %>%
+#   filter(p_value == "<0.001" | as.numeric(p_value)<0.05)
+```
+
+## 4. Appendix Table 1: Conditional logit model
+
+```{r appendix conditional logit model}
+# use apollo package to analyze
+# ####################################################### #
+#### 1. Definition of core settings                        
+# ####################################################### #
+### clear
+rm(list = ls())
+
+### Load library
+library(apollo)
+
+### Initialise code
+apollo_initialise()
+
+### Set core controls
+apollo_control <- list(
+  modelName = "MNL",
+  modelDescr = "Adults' preferences for a vaccine product",
+  indivID = "ID"
+  #,weights = "weight" # apply sample weights
+)
+# ####################################################### #
+#### 2. Data loading                                   ####
+# ####################################################### #
+database <- read.csv(file = "Data/database.csv")
+database <- subset(database, select = c("ID","price.1","risk2.1","risk3.1","duration2.1",
+                                     "duration3.1","efficacy2.1","efficacy3.1",
+                                     "admin.1","doses2.1","doses3.1","origin.1",
+                                     "price.2","risk2.2","risk3.2",
+                                     "duration2.2","duration3.2","efficacy2.2",
+                                     "efficacy3.2","admin.2","doses2.2",
+                                     "doses3.2","origin.2","choice","weight"))
+
+database <- as.data.frame(database)
+
+# ####################################################### #
+#### 3. Parameter definition                           ####
+# ####################################################### #
+
+### Vector of parameters, including any that are kept fixed 
+### during estimation
+
+apollo_beta <- c(
+  asc     = 0,
+  b_price  = 0,
+  b_risk2  = 0,
+  b_risk3  = 0,
+  b_duration2  = 0,
+  b_duration3 = 0,
+  b_efficacy2 = 0,
+  b_efficacy3 = 0,
+  b_oral = 0,
+  b_dose2 = 0,
+  b_dose3 = 0,
+  b_imported = 0
+)
+
+### Vector with names (in quotes) of parameters to be
+###  kept fixed at their starting value in apollo_beta.
+### Use apollo_beta_fixed = c() for no fixed parameters.
+
+apollo_fixed <- c() # no fixed parameters in our model
+
+# ####################################################### #
+#### 4. Input validation                               ####
+# ####################################################### #
+
+apollo_inputs = apollo_validateInputs()
+
+# ####################################################### #
+#### 5. Likelihood definition                          ####
+# ####################################################### #
+
+apollo_probabilities <- function(apollo_beta, apollo_inputs, functionality = "estimate"){
+  ### Attach inputs and detach after function exit
+  apollo_attach(apollo_beta, apollo_inputs)
+  on.exit(apollo_detach(apollo_beta, apollo_inputs))
+  
+  ### Create list of probabilities P
+  P <- list()
+  
+  V <- list()
+  
+  ### List of utilities: these must use the same names as
+  ### in mnl_settings, order is irrelevant.
+  V[['alt1']] = asc + b_price*price.1 + b_risk2*risk2.1 + b_risk3*risk3.1 + 
+    b_duration2*duration2.1 + b_duration3*duration3.1 + b_efficacy2*efficacy2.1 + 
+    b_efficacy3*efficacy3.1 + b_oral*admin.1 + b_dose2*doses2.1 + 
+    b_dose3*doses3.1 + b_imported*origin.1
+  V[['alt2']] = asc + b_price*price.2 + b_risk2*risk2.2 + b_risk3*risk3.2 + 
+    b_duration2*duration2.2 + b_duration3*duration3.2 + b_efficacy2*efficacy2.2 + 
+    b_efficacy3*efficacy3.2 + b_oral*admin.2 + b_dose2*doses2.2 + 
+    b_dose3*doses3.2 + b_imported*origin.2
+  V[['alt3']] = 0
+  
+  ### Define settings for MNL model component
+  mnl_settings <- list(
+    alternatives = c(alt1 = 1, alt2 = 2, alt3 = 3),
+    avail        = list(alt1 = 1, alt2 = 1, alt3 = 1),
+    choiceVar    = choice,
+    V            = V
+  )
+  
+  ### Compute probabilities using MNL model
+  P[['model']] = apollo_mnl(mnl_settings, functionality)
+  
+  ### Take product across observation for same individual
+  P = apollo_panelProd(P, apollo_inputs, functionality)
+  
+  ### Using sampling weights in estimation and prediction
+  #P = apollo_weighting(P, apollo_inputs, functionality)
+  
+  ### Prepare and return outputs of function
+  P = apollo_prepareProb(P, apollo_inputs, functionality)
+  
+  return(P)
+}
+
+# ####################################################### #
+#### 6. Model estimation                   ####
+# ####################################################### #
+fit <- apollo_estimate(apollo_beta, apollo_fixed, 
+                       apollo_probabilities, apollo_inputs)
+
+save(fit, file = "Model/CL.RData")
+```
+
+### 4.1 Report the CL model result
+
+```{r}
+load(file = "Model/CL.RData")
+
+# function: Format DCE model output for the nested/conditional logit model
+FormatResult <- function(apollo_model, df=143998){
   beta_dat <- as.data.frame(apollo_modelOutput(apollo_model, list(printPVal = TRUE)))[,c(1,5,7)] %>%
     rename(p_value = `p(1-sided)`) %>%
     mutate(
@@ -1593,7 +2670,7 @@ FormatResult_ML <- function(apollo_model, df=143998){
     if (var_name[i]!="b_price"){
       temp<-apollo_deltaMethod(apollo_model, deltaMethod_settings = list(operation = "ratio", 
                                                                 parName1 = var_name[i], 
-                                                                parName2 = "b_price_mu", 
+                                                                parName2 = "b_price", 
                                                                 multPar1 = -1))
       beta_dat[var_name[i], "WTP"] = temp[1]
       # one sided p value
@@ -1603,185 +2680,280 @@ FormatResult_ML <- function(apollo_model, df=143998){
   beta_dat <- beta_dat %>% mutate_at(vars(ends_with("p_value")), function(v) ifelse(v<1e-3,"<0.001",v))
   return(beta_dat)
 }
+# ####################################################### #
+#### 7. Report result                ####
+# ####################################################### #
+result_dat <- FormatResult(fit)
 
+write.csv(result_dat,file = "Result/CL.csv")
+```
+
+## 5. Appendix Table 2: Mixed logit model
+
+```{r Mixed logit model}
+# use apollo package to analyze
+# ####################################################### #
+#### 1. Definition of core settings
+# ####################################################### #
+### Clear memory
+rm(list = ls())
+
+### Load library
+library(apollo)
+
+### Initialise code
+apollo_initialise()
+
+### Set core controls
+apollo_control <- list(
+  modelName = "Mixed logit model",
+  modelDescr = "Mixed logit model to determine Adults' preferences for a vaccine product",
+  indivID = "ID",
+  mixing = TRUE, # mixed logit model for random coefficients, FALSE for MNL model
+  nCores = 6
+  #,weights = "weight"
+)
+# ####################################################### #
+#### 2. Data loading                                   ####
+# ####################################################### #
+database <- read.csv(file = "Data/database.csv")
+socio_dat <- read.csv(file = "Data/socio_dat.csv")
+#database <- database[1:1440, ]
+database <- subset(database, select = c("ID","price.1","risk2.1","risk3.1","duration2.1",
+                                     "duration3.1","efficacy2.1","efficacy3.1",
+                                     "admin.1","doses2.1","doses3.1","origin.1",
+                                     "price.2","risk2.2","risk3.2",
+                                     "duration2.2","duration3.2","efficacy2.2",
+                                     "efficacy3.2","admin.2","doses2.2",
+                                     "doses3.2","origin.2","choice","weight"))
+database <- database %>% 
+  left_join(socio_dat, by = "ID") %>%
+  dplyr::filter(chronic_2l == 1)
+
+database <- as.data.frame(database)
+
+# ####################################################### #
+#### 3. Parameter definition                           ####
+# ####################################################### #
+
+### Vector of parameters, including any that are kept fixed
+### during estimation
+
+apollo_beta <- c(
+  asc = 0,
+  asc_loc = 0, # ASC: location parameter, accounting for the left to right bias
+  b_price_mu = 0,
+  b_risk2_mu = 0,
+  b_risk3_mu = 0,
+  b_duration2_mu = 0,
+  b_duration3_mu = 0,
+  b_efficacy2_mu = 0,
+  b_efficacy3_mu = 0,
+  b_oral_mu = 0,
+  b_dose2_mu = 0,
+  b_dose3_mu = 0,
+  b_imported_mu = 0,
+  b_price_sigma = 0,
+  b_risk2_sigma = 0,
+  b_risk3_sigma = 0,
+  b_duration2_sigma = 0,
+  b_duration3_sigma = 0,
+  b_efficacy2_sigma = 0,
+  b_efficacy3_sigma = 0,
+  b_oral_sigma = 0,
+  b_dose2_sigma = 0,
+  b_dose3_sigma = 0,
+  b_imported_sigma = 0
+)
+
+### Vector with names (in quotes) of parameters to be kept fixed at their starting value in apollo_beta, use apollo_beta_fixed = c() if none
+apollo_fixed <- c()
+
+# ################################################################# #
+#### 4. Define Random Components                                    ####
+# ################################################################# #
+
+### Set parameters for generating draws
+apollo_draws <- list(
+  interDrawsType = "mlhs",
+  interNDraws = 500,
+  interUnifDraws = c(),
+  interNormDraws = paste0("draws_", c(
+    "price", "risk2",
+    "risk3", "duration2",
+    "duration3", "efficacy2",
+    "efficacy3", "oral",
+    "dose2", "dose3",
+    "imported"
+  )),
+  intraDrawsType = "",
+  intraNDraws = 0,
+  intraUnifDraws = c(),
+  intraNormDraws = c()
+)
+
+### Create random parameters
+apollo_randCoeff <- function(apollo_beta, apollo_inputs) {
+  randcoeff <- list()
+
+  randcoeff[["b_price"]] <- b_price_mu + b_price_sigma * draws_price
+  randcoeff[["b_risk2"]] <- b_risk2_mu + b_risk2_sigma * draws_risk2
+  randcoeff[["b_risk3"]] <- b_risk3_mu + b_risk3_sigma * draws_risk3
+  randcoeff[["b_duration2"]] <- b_duration2_mu + b_duration2_sigma * draws_duration2
+  randcoeff[["b_duration3"]] <- b_duration3_mu + b_duration3_sigma * draws_duration3
+  randcoeff[["b_efficacy2"]] <- b_efficacy2_mu + b_efficacy2_sigma * draws_efficacy2
+  randcoeff[["b_efficacy3"]] <- b_efficacy3_mu + b_efficacy3_sigma * draws_efficacy3
+  randcoeff[["b_oral"]] <- b_oral_mu + b_oral_sigma * draws_oral
+  randcoeff[["b_dose2"]] <- b_dose2_mu + b_dose2_sigma * draws_dose2
+  randcoeff[["b_dose3"]] <- b_dose3_mu + b_dose3_sigma * draws_dose3
+  randcoeff[["b_imported"]] <- b_imported_mu + b_imported_sigma * draws_imported
+
+  return(randcoeff)
+}
+
+# ####################################################### #
+#### 5. Input validation                               ####
+# ####################################################### #
+
+apollo_inputs <- apollo_validateInputs()
+
+# ####################################################### #
+#### 6. Likelihood definition                          ####
+# ####################################################### #
+
+apollo_probabilities <- function(apollo_beta, apollo_inputs, functionality = "estimate") {
+  ### Attach inputs and detach after function exit
+  apollo_attach(apollo_beta, apollo_inputs)
+  on.exit(apollo_detach(apollo_beta, apollo_inputs))
+
+  ### Create list of probabilities P
+  P <- list()
+
+  V <- list()
+
+  ### List of utilities: these must use the same names as
+  ### in mnl_settings, order is irrelevant.
+  V[["alt1"]] <- asc + asc_loc + b_price * price.1 + b_risk2 * risk2.1 + b_risk3 * risk3.1 +
+    b_duration2 * duration2.1 + b_duration3 * duration3.1 + b_efficacy2 * efficacy2.1 +
+    b_efficacy3 * efficacy3.1 + b_oral * admin.1 + b_dose2 * doses2.1 +
+    b_dose3 * doses3.1 + b_imported * origin.1
+  V[["alt2"]] <- asc + b_price * price.2 + b_risk2 * risk2.2 + b_risk3 * risk3.2 +
+    b_duration2 * duration2.2 + b_duration3 * duration3.2 + b_efficacy2 * efficacy2.2 +
+    b_efficacy3 * efficacy3.2 + b_oral * admin.2 + b_dose2 * doses2.2 +
+    b_dose3 * doses3.2 + b_imported * origin.2
+  V[["alt3"]] <- 0
+
+  ### Define settings for MNL model component
+  mnl_settings <- list(
+    alternatives = c(alt1 = 1, alt2 = 2, alt3 = 3),
+    avail        = list(alt1 = 1, alt2 = 1, alt3 = 1),
+    choiceVar    = choice,
+    V            = V
+  )
+
+  ### Compute probabilities using MNL model
+  P[["model"]] <- apollo_mnl(mnl_settings, functionality)
+
+  ### Take product across observation for same individual
+  P = apollo_panelProd(P, apollo_inputs, functionality)
+
+  ### Average across inter-individual draws
+  P = apollo_avgInterDraws(P, apollo_inputs, functionality)
+
+  ### Prepare and return outputs of function
+  P = apollo_prepareProb(P, apollo_inputs, functionality)
+  
+  # ### Using sampling weights in estimation and prediction
+  # P = apollo_weighting(P, apollo_inputs, functionality)
+
+  return(P)
+}
+
+# ####################################################### #
+#### 7. Model estimation                ####
+# ####################################################### #
+
+fit <- apollo_estimate(
+  apollo_beta, apollo_fixed,
+  apollo_probabilities, apollo_inputs
+)
+
+# save(fit, file = paste0(getwd(), "/Model/ML_preference_space.RData"))
+
+# speed testing for multicores
+
+```
+
+### 5.1 Report the basic model results (Appendix Table S1)
+
+```{r}
+# choose either one: ML_preference_space.RData / ML_corr_WTP_sapce.RData
+load(file = "Model/ML_preference_space.RData")
+# ####################################################### #
+#### 7. Report result                ####
+# ####################################################### #
+
+apollo_modelOutput(fit)
 result_dat <- FormatResult_ML(fit)
 
 result_dat_star <- result_dat %>%
   filter(p_value == "<0.001" | as.numeric(p_value)<0.05)
 
 write.csv(result_dat,file = "Result/ML_preferenced.csv")
+
 ```
 
 
-#### 2.4.2 Report the extended ML model result
+# 6. Appendix Table 2: Report the relative importance
 
-```{r result of extended model}
-#### Effect of main term and individual characteristics
-load(file = "Model/ML_interaction_preference.RData")
-result_dat = FormatResult_ML(fit)
+```{r}
+# rm(list = ls())
+load(file = "Model/ML_preference_space.RData")
 
-export(result_dat[c(1:12, 193:203), ], "Result/ML_extended.csv", row.names = TRUE)
+attributes <- apollo_modelOutput(fit, list(printPVal = TRUE)) 
+fit$LLout # -101462.4
 
-#### Beta and OR matrix
-beta_dat <- result_dat %>%
-  mutate(
-  Estimate = ifelse(str_detect(rownames(result_dat), "price"), Estimate*100, Estimate), # multiply the beta of 100 RMB.
-  beta = paste0(as.character(sprintf("%.3f", Estimate)), 
-                case_when(p_value == "<0.001" ~ "***",
-                          p_value >= 0.001 & p_value < 0.01 ~ "**",
-                          p_value >= 0.01 & p_value < 0.05 ~ "*",
-                          p_value >= 0.05 ~ "")),
-  OR = paste0(as.character(sprintf("%.4f", exp(Estimate))), 
-                case_when(p_value == "<0.001" ~ "***",
-                          p_value >= 0.001 & p_value < 0.01 ~ "**",
-                          p_value >= 0.01 & p_value < 0.05 ~ "*",
-                          p_value >= 0.05 ~ ""))
-)
+load(file = "Model/ML_Exclude_price.RData")
 
-interaction_effect_pvalue_mat <- matrix(beta_dat$beta[43:192], nrow = 15, ncol = 10, byrow = TRUE, dimnames = list(rownames = c("Gender: Female", "Age: >60 years", "Age: 40-59 years", "Education: college and above", "Education: Middle and high school", "Marriage: married", "Residence: Urban", "No jobs", "Work in a public sector", "Insurance: UEBMI", "High income", "Middle income", "Chronic: has any chronic conditions", "COVID-19 vaccination history: has taken at least one dose", "Depression: depressed"), col_names = c("Price", "Risk: one in a million", "Risk: one in hundred thousand ", "Duration: 12 months", "Duration: life long", "Efficacy: 70%", "Efficacy: 90%", "Oral", "3 doses", "imported")))
+attributes_price <- apollo_modelOutput(fit, list(printPVal = TRUE)) 
+fit$LLout # -106633.6
 
-interaction_OR_p_value_mat <- matrix(beta_dat$OR[43:192], nrow = 15, ncol = 10, byrow = TRUE, dimnames = list(rownames = c("Gender: Female", "Age: 18-39 years", "Age: 40-59 years", "Education: primary school or less", "Education: Middle and high school", "Marriage: married", "Residence: Urban", "Work in a private sector", "Work in a public sector", "Insurance: UEBMI", "Income: < 60000 RMB", "Income: 60000 - 149999 RMB", "Chronic: has any chronic conditions", "COVID-19 vaccination history: has taken at least one dose", "Depression: depressed"), col_names = c("price", "risk: one in a million", "risk: one in hundred thousand ", "duration: 12 months", "duration: life long", "efficacy: 70%", "efficacy: 90%", "oral", "3 doses", "imported")))
+load(file = "Model/ML_Exclude_admin.RData")
 
-export(interaction_effect_pvalue_mat,"Result/ML_extended_beta_matrix.csv", row.names = TRUE)
+attributes_admin <- apollo_modelOutput(fit, list(printPVal = TRUE)) 
+fit$LLout # -101655.3
 
-# export(interaction_OR_p_value_mat,"Result/ML_extended_OR_matrix.csv", row.names = TRUE)
+load(file = "Model/ML_Exclude_doses.RData")
 
-#### province effect
+attributes_dose <- apollo_modelOutput(fit, list(printPVal = TRUE)) 
+fit$LLout # -101711.9
 
-# load(file = "Model/NL_interaction.RData")
-# result_dat <- FormatResult(fit)
-WTP_Chongqing31 <- deltaMethod(fit, "(b_Hebei1+b_Shanxi2+b_Liaoning3+b_Jilin4+b_Heilongjiang5+b_Jiangsu6+b_Zhejiang7+b_Anhui8+b_Fujian9+b_Jiangxi10+b_Shandong11+b_Henan12+b_Hubei13+b_Hunan14+b_Guangdong15+b_Hainan16+b_Sichuan17+b_Guizhou18+b_Yunnan19+b_Shaanxi20+b_Gansu21+b_Qinghai22+b_Neimongol23+b_Guangxi24+b_Tibet25+b_Ningxia26+b_Xinjiang27+b_Beijing28+b_Shanghai29+b_Tianjin30)/b_price_mu", func = "WTP_Chongqing31", vcov. = fit$robvarcov)
+load(file = "Model/ML_Exclude_duration.RData")
 
-b_Chongqing31 <- deltaMethod(fit, "-(b_Hebei1+b_Shanxi2+b_Liaoning3+b_Jilin4+b_Heilongjiang5+b_Jiangsu6+b_Zhejiang7+b_Anhui8+b_Fujian9+b_Jiangxi10+b_Shandong11+b_Henan12+b_Hubei13+b_Hunan14+b_Guangdong15+b_Hainan16+b_Sichuan17+b_Guizhou18+b_Yunnan19+b_Shaanxi20+b_Gansu21+b_Qinghai22+b_Neimongol23+b_Guangxi24+b_Tibet25+b_Ningxia26+b_Xinjiang27+b_Beijing28+b_Shanghai29+b_Tianjin30)", func = "b_Chongqing31", vcov. = fit$robvarcov)
+attributes_duration <- apollo_modelOutput(fit, list(printPVal = TRUE)) 
+fit$LLout # -108911.8
 
-b_Chongqing31 <- b_Chongqing31 %>%
-  select(Estimate, `2.5 %`, `97.5 %`) %>%
-  rename(
-    `2.5%` = `2.5 %`,
-    `97.5%` = `97.5 %`
-  ) %>%
-  mutate(
-    WTP = WTP_Chongqing31$Estimate,
-    p_value = ifelse(
-      as.numeric(b_Chongqing31[1]/b_Chongqing31[2])>0,
-      2*(1-pt(as.numeric(b_Chongqing31[1]/b_Chongqing31[2]),df = 143998)),
-      2*pt(as.numeric(b_Chongqing31[1]/b_Chongqing31[2]),df = 143998)
-    ),
-    WTP_p_value = ifelse(
-      as.numeric(WTP_Chongqing31[1]/WTP_Chongqing31[2])>0,
-      2*(1-pt(as.numeric(WTP_Chongqing31[1]/WTP_Chongqing31[2]),df = 143998)),
-      2*pt(as.numeric(WTP_Chongqing31[1]/WTP_Chongqing31[2]),df = 143998)
-    )
-  )
+load(file = "Model/ML_Exclude_efficacy.RData")
 
-province_dat <- rbind(result_dat[13:42, ], b_Chongqing31)
+attributes_efficacy <- apollo_modelOutput(fit, list(printPVal = TRUE)) 
+fit$LLout # -108233.7
 
-write.csv(province_dat,file = "Result/ML_extended_province.csv")
-```
+load(file = "Model/ML_Exclude_origin.RData")
 
-```{r draw the province map}
-map_data <- import("Data/Mapdata/Chinamap_data.xlsx")
-map_data <- province_dat %>%
-  dplyr::select(WTP) %>%
-  mutate(
-    WTP = WTP+result_dat$WTP[1],
-    province = sapply(str_split(rownames(province_dat), pattern = "_|\\d"), "[", 2)
-  ) %>%
-  right_join(map_data, by = "province")
+attributes_origin <- apollo_modelOutput(fit, list(printPVal = TRUE)) 
+fit$LLout # -105342
 
-# # Approach 1: using the shp data -----
-# 
-# mydat = rgdal::readOGR("Data/Mapdata/中华人民共和国.shp")
-# 
-# # convert the `SpatialPolygonsDataFrame` type into `data.frame`# if error occurs, type `gpclibPermit()`
-# gpclibPermit()
-# mysh <- fortify(mydat)
-# 
-# # convert the method of encoding
-# mysh = transform(mysh, name = iconv(name, from = "UTF8"))
-# 
-# names(mysh)[2:3] = c("x","y")
-# unique(mysh$name)
-# data_merge <- left_join(mysh,map_data)
-# 
-# pidat1 <-subset(data_merge,select = c("name","id","province_abbr","WTP"))%>%
-#          unique() 
-# 
-# # determine the fonts
-# windowsFonts(myFont = windowsFont("Times New Roman"))
-# 
-# map = ggplot(pidat1) +
-#   geom_map(aes(map_id = id, fill = WTP), color = "grey", map = mysh) +
-#   # geom_text_repel(data=cnames,aes(long_mean,lat_mean,label=province_abbr),size=3,fontface="bold")+
-#   scale_fill_distiller(name = "WTP (RMB)", palette = "RdYlGn", direction = 1) +
-#   expand_limits(mysh) + 
-#   coord_map() + #使用mapproj包将地球的一部分（近似球形）投影到2D平面
-#   labs(x = "", y = "", title = "",subtitle = "")+
-#   theme(
-#     legend.title = element_text(family = "myFont", face = "bold"),
-#     panel.grid.major =  element_blank(), 
-#     panel.grid.minor = element_blank(),
-#     panel.background = element_blank(),
-#     axis.line = element_blank(),
-#     axis.text = element_blank(),
-#     axis.ticks = element_blank()) +
-#   labs(fill = "WTP (RMB)")
-# 
-# print(map)
-# ggsave(filename = "Figure/Map.png", map, width = 10, height = 10, dpi = 300, units = "in", device='png')
+load(file = "Model/ML_Exclude_risk.RData")
 
-# Approach 2: use the json data -----
-
-library(tidyverse)
-library(readxl)
-library(sf)
-library(ggplot2)
-
-# 获取全国省级地图，则加后缀quanguo.json
-# 获取全国县级地图，则加后缀xian_quanguo.json
-# 获取部分地区，如某个市的县级地图，则加该行政区域代码，再加.json
-# 如果要获取市级地图，需要按遍历行政区域代码获取所有市的地图，然后合并县级区域
-# 全国主要山脉，南海九段线数据，则加后缀quanguo_Line.geojson
-
-#API_pre = "http://xzqh.mca.gov.cn/data/"
-
-China <- st_read(dsn = "Data/Mapdata/china.json",stringsAsFactors = FALSE)
-
-# check whether the data contains the projecting information
-# st_crs(China) # NA means no such information; need to attach manually
-# China <- st_set_crs(China, 4326)
-China <- st_transform(China, "+init=epsg:4508")
-
-
-data_merge <- China %>%
-  left_join(map_data, by = "adcode")
-
-# determine the fonts
-windowsFonts(myFont = windowsFont("Times New Roman"))
-
-map<-ggplot() + # 底图
-  geom_sf(data = data_merge, aes(fill = WTP)) + # 省域
-  coord_sf() +  # 投影方式
-  scale_fill_distiller(name = "WTP (RMB)", palette = "RdYlGn", direction = 1) +
-  theme(
-    legend.title = element_text(family = "myFont", face = "bold", size = 12),
-    panel.grid.major =  element_blank(), 
-    panel.grid.minor = element_blank(),
-    panel.background = element_blank(),
-    axis.line = element_blank(),
-    axis.text = element_blank(),
-    axis.ticks = element_blank())
-
-print(map)
-ggsave(filename = "Figure/Map2.png", map, width = 10, height = 10, dpi = 300, units = "in", device='png')
+attributes_risk <- apollo_modelOutput(fit, list(printPVal = TRUE)) 
+fit$LLout # -103661.5
 ```
 
 
-### 2.5 Relative importance of the attributes
+## 7. Appendix Table 3: Relative importance of the attributes
 
-#### 2.5.1 Exclude price
 
-```{r Mixed logit model}
+```{r Exclude price}
 # use apollo package to analyze
 # ####################################################### #
 #### 1. Definition of core settings
@@ -1970,9 +3142,8 @@ save(fit, file = paste0(getwd(), "/ML_Exclude_price.RData"))
 # apollo_modelOutput(fit, list(printPVal = TRUE)) # LL(final) = 
 ```
 
-#### 2.5.2 Exclude risk
 
-```{r Mixed logit model}
+```{r Exclude risk}
 # use apollo package to analyze
 # ####################################################### #
 #### 1. Definition of core settings
@@ -2160,9 +3331,8 @@ save(fit, file = paste0(getwd(), "/ML_Exclude_risk.RData"))
 # apollo_modelOutput(fit, list(printPVal = TRUE)) # LL(final) = 
 ```
 
-#### 2.5.3 Exclude duration
 
-```{r}
+```{r Exclude duration}
 # use apollo package to analyze
 # ####################################################### #
 #### 1. Definition of core settings                        
@@ -2347,9 +3517,8 @@ save(fit, file = paste0(getwd(), "/ML_Exclude_duration.RData"))
 # apollo_modelOutput(fit, list(printPVal = TRUE)) # LL(final) = 
 ```
 
-#### 2.5.4 Exclude efficacy
 
-```{r}
+```{r Exclude efficacy}
 # use apollo package to analyze
 # ####################################################### #
 #### 1. Definition of core settings                        
@@ -2534,9 +3703,8 @@ save(fit, file = paste0(getwd(), "/ML_Exclude_efficacy.RData"))
 # apollo_modelOutput(fit, list(printPVal = TRUE)) # LL(final) = 
 ```
 
-#### 2.5.5 Exclude admin
 
-```{r}
+```{r Exclude admin}
 # use apollo package to analyze
 # ####################################################### #
 #### 1. Definition of core settings                        
@@ -2725,9 +3893,8 @@ save(fit, file = paste0(getwd(), "/ML_Exclude_admin.RData"))
 
 ```
 
-#### 2.5.6 Exclude doses
 
-```{r}
+```{r Exclude doses}
 # use apollo package to analyze
 # ####################################################### #
 #### 1. Definition of core settings                        
@@ -2912,9 +4079,8 @@ save(fit, file = paste0(getwd(), "/ML_Exclude_doses.RData"))
 # apollo_modelOutput(fit, list(printPVal = TRUE)) # LL(final) = 
 ```
 
-#### 2.5.7 Exclude origin
 
-```{r}
+```{r Exclude origin}
 # use apollo package to analyze
 # ####################################################### #
 #### 1. Definition of core settings                        
@@ -3099,172 +4265,4 @@ fit <- apollo_estimate(apollo_beta, apollo_fixed,
 save(fit, file = paste0(getwd(), "/ML_Exclude_origin.RData"))
 
 # apollo_modelOutput(fit, list(printPVal = TRUE)) # LL(final) = 
-```
-
-## 3. Appendix Table 1: Conditional logit model
-
-```{r appendix conditional logit model}
-# use apollo package to analyze
-# ####################################################### #
-#### 1. Definition of core settings                        
-# ####################################################### #
-### clear
-rm(list = ls())
-
-### Load library
-library(apollo)
-
-### Initialise code
-apollo_initialise()
-
-### Set core controls
-apollo_control <- list(
-  modelName = "MNL",
-  modelDescr = "Adults' preferences for a vaccine product",
-  indivID = "ID"
-  #,weights = "weight" # apply sample weights
-)
-# ####################################################### #
-#### 2. Data loading                                   ####
-# ####################################################### #
-database <- read.csv(file = "Data/database.csv")
-database <- subset(database, select = c("ID","price.1","risk2.1","risk3.1","duration2.1",
-                                     "duration3.1","efficacy2.1","efficacy3.1",
-                                     "admin.1","doses2.1","doses3.1","origin.1",
-                                     "price.2","risk2.2","risk3.2",
-                                     "duration2.2","duration3.2","efficacy2.2",
-                                     "efficacy3.2","admin.2","doses2.2",
-                                     "doses3.2","origin.2","choice","weight"))
-
-database <- as.data.frame(database)
-
-# ####################################################### #
-#### 3. Parameter definition                           ####
-# ####################################################### #
-
-### Vector of parameters, including any that are kept fixed 
-### during estimation
-
-apollo_beta <- c(
-  asc     = 0,
-  b_price  = 0,
-  b_risk2  = 0,
-  b_risk3  = 0,
-  b_duration2  = 0,
-  b_duration3 = 0,
-  b_efficacy2 = 0,
-  b_efficacy3 = 0,
-  b_oral = 0,
-  b_dose2 = 0,
-  b_dose3 = 0,
-  b_imported = 0
-)
-
-### Vector with names (in quotes) of parameters to be
-###  kept fixed at their starting value in apollo_beta.
-### Use apollo_beta_fixed = c() for no fixed parameters.
-
-apollo_fixed <- c() # no fixed parameters in our model
-
-# ####################################################### #
-#### 4. Input validation                               ####
-# ####################################################### #
-
-apollo_inputs = apollo_validateInputs()
-
-# ####################################################### #
-#### 5. Likelihood definition                          ####
-# ####################################################### #
-
-apollo_probabilities <- function(apollo_beta, apollo_inputs, functionality = "estimate"){
-  ### Attach inputs and detach after function exit
-  apollo_attach(apollo_beta, apollo_inputs)
-  on.exit(apollo_detach(apollo_beta, apollo_inputs))
-  
-  ### Create list of probabilities P
-  P <- list()
-  
-  V <- list()
-  
-  ### List of utilities: these must use the same names as
-  ### in mnl_settings, order is irrelevant.
-  V[['alt1']] = asc + b_price*price.1 + b_risk2*risk2.1 + b_risk3*risk3.1 + 
-    b_duration2*duration2.1 + b_duration3*duration3.1 + b_efficacy2*efficacy2.1 + 
-    b_efficacy3*efficacy3.1 + b_oral*admin.1 + b_dose2*doses2.1 + 
-    b_dose3*doses3.1 + b_imported*origin.1
-  V[['alt2']] = asc + b_price*price.2 + b_risk2*risk2.2 + b_risk3*risk3.2 + 
-    b_duration2*duration2.2 + b_duration3*duration3.2 + b_efficacy2*efficacy2.2 + 
-    b_efficacy3*efficacy3.2 + b_oral*admin.2 + b_dose2*doses2.2 + 
-    b_dose3*doses3.2 + b_imported*origin.2
-  V[['alt3']] = 0
-  
-  ### Define settings for MNL model component
-  mnl_settings <- list(
-    alternatives = c(alt1 = 1, alt2 = 2, alt3 = 3),
-    avail        = list(alt1 = 1, alt2 = 1, alt3 = 1),
-    choiceVar    = choice,
-    V            = V
-  )
-  
-  ### Compute probabilities using MNL model
-  P[['model']] = apollo_mnl(mnl_settings, functionality)
-  
-  ### Take product across observation for same individual
-  P = apollo_panelProd(P, apollo_inputs, functionality)
-  
-  ### Using sampling weights in estimation and prediction
-  #P = apollo_weighting(P, apollo_inputs, functionality)
-  
-  ### Prepare and return outputs of function
-  P = apollo_prepareProb(P, apollo_inputs, functionality)
-  
-  return(P)
-}
-
-# ####################################################### #
-#### 6. Model estimation                   ####
-# ####################################################### #
-fit <- apollo_estimate(apollo_beta, apollo_fixed, 
-                       apollo_probabilities, apollo_inputs)
-
-save(fit, file = "Model/CL.RData")
-```
-
-### 3.1 Report the CL model result
-
-```{r}
-load(file = "Model/CL.RData")
-
-# function: Format DCE model output for the nested/conditional logit model
-FormatResult <- function(apollo_model, df=143998){
-  beta_dat <- as.data.frame(apollo_modelOutput(apollo_model, list(printPVal = TRUE)))[,c(1,5,7)] %>%
-    rename(p_value = `p(1-sided)`) %>%
-    mutate(
-      `2.5%` = Estimate + qnorm(0.025)*Rob.s.e.,
-      `97.5%` = Estimate + qnorm(0.975)*Rob.s.e.
-    ) %>%
-    dplyr::select(Estimate, `2.5%`, `97.5%`, p_value)
-  var_name <- names(coef(apollo_model))
-  beta_dat$WTP <- NA_real_
-  beta_dat$WTP_p_value <- NA_real_
-  for (i in c(1:length(var_name))) {
-    if (var_name[i]!="b_price"){
-      temp<-apollo_deltaMethod(apollo_model, deltaMethod_settings = list(operation = "ratio", 
-                                                                parName1 = var_name[i], 
-                                                                parName2 = "b_price", 
-                                                                multPar1 = -1))
-      beta_dat[var_name[i], "WTP"] = temp[1]
-      # one sided p value
-      beta_dat[var_name[i],"WTP_p_value"] = ifelse(temp[3]>0,2*(1-pt(temp[3],df)),2*pt(temp[3],df))
-    }
-  }
-  beta_dat <- beta_dat %>% mutate_at(vars(ends_with("p_value")), function(v) ifelse(v<1e-3,"<0.001",v))
-  return(beta_dat)
-}
-# ####################################################### #
-#### 7. Report result                ####
-# ####################################################### #
-result_dat <- FormatResult(fit)
-
-write.csv(result_dat,file = "Result/CL.csv")
 ```
