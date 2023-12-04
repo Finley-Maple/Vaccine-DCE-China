@@ -37,9 +37,6 @@ FormatResult_ML <- function(apollo_model){
                                                                 parName1 = var_name[i], 
                                                                 parName2 = "b_price_mu", 
                                                                 multPar1 = -1))
-      # beta_dat[var_name[i], "WTP"] = temp[1]
-      # # one sided p value
-      # beta_dat[var_name[i],"WTP_p_value"] = ifelse(temp[3]>0,(1-pt(temp[3],df)),pt(temp[3],df))
     }
   }
   beta_dat <- beta_dat %>% mutate_at(vars(ends_with("p_value")), function(v) ifelse(v<1e-3,"<0.001",v))
@@ -200,31 +197,6 @@ dat %>% tabyl(bmigp)
 round(wpct(dat$hasvaccined_2l, dat$weight), 4)
 dat %>% tabyl(hasvaccined_2l)
 
-# How long ago did you get the first dose of the COVID-19 vaccine?
-# round(wpct(dat$B23X1, dat$weight), 4)
-# round(wpct(dat$B23X1), 4)
-
-# How many shots of the COVID-19 vaccine have you received so far?
-# round(wpct(dat$B23X2, dat$weight), 4)
-# round(wpct(dat$B23X2), 4)
-
-# Where did you get the COVID-19 vaccine?
-# round(wpct(dat$B23X3, dat$weight), 4)
-# round(wpct(dat$B23X3), 4)
-
-# Do you go for vaccination by yourself or participate in group vaccination?
-# round(wpct(dat$B23X4, dat$weight), 4)
-# round(wpct(dat$B23X4), 4)
-
-# perceived risk
-
-# 1.6 trust -----
-# how much do you trust officials?
-
-# how much do you trust academic institutions?
-
-# how much do you trust pharmaceutical companies?
-
 # select the attributes to be included in interaction terms
 socio_dat <- dat %>%
   mutate(
@@ -275,15 +247,7 @@ mysvy %>%
   tbl_svysummary(
     statistic = list(all_categorical() ~ "{p}%"),
     digits = all_categorical() ~ 1
-    # change the label
-    # label = list(
-    #   gender_2l ~ "Gender"
-    # )
   )
-
-# without weights
-
-
 
 
 dat %>%
@@ -302,10 +266,6 @@ dat %>%
   tbl_summary(
     statistic = list(all_categorical() ~ "{n} ({p}%)"),
     digits = all_categorical() ~ 1
-    # change the label
-    # label = list(
-    #   gender_2l ~ "Gender"
-    # ) 
   )
 ```
 
@@ -727,51 +687,6 @@ apollo_beta <- c(
   b_dose2_mu = -0.046,
   b_dose3_mu = -0.0556,
   b_imported_mu = -0.292,
-  # b_gender_2l = 0,
-  # b_age_high = 0,
-  # b_age_mid = 0,
-  # b_education_high = 0,
-  # b_education_mid = 0,
-  # b_marriage_2l = 0,
-  # b_residence_2l = 0,
-  # b_occupation_high = 0,
-  # b_occupation_mid = 0,
-  # b_insurance_2l = 0,
-  # b_income_high = 0,
-  # b_income_mid = 0,
-  # b_chronic_2l = 0,
-  # b_hasvaccined_2l = 0,
-  # b_depression_2l = 0,
-  #   b_Hebei1 = 0,
-  # b_Shanxi2 = 0,
-  # b_Liaoning3 = 0,
-  # b_Jilin4 = 0,
-  # b_Heilongjiang5 = 0,
-  # b_Jiangsu6 = 0,
-  # b_Zhejiang7 = 0,
-  # b_Anhui8 = 0,
-  # b_Fujian9 = 0,
-  # b_Jiangxi10 = 0,
-  # b_Shandong11 = 0,
-  # b_Henan12 = 0,
-  # b_Hubei13 = 0,
-  # b_Hunan14 = 0,
-  # b_Guangdong15 = 0,
-  # b_Hainan16 = 0,
-  # b_Sichuan17 = 0,
-  # b_Guizhou18 = 0,
-  # b_Yunnan19 = 0,
-  # b_Shaanxi20 = 0,
-  # b_Gansu21 = 0,
-  # b_Qinghai22 = 0,
-  # b_Neimongol23 = 0,
-  # b_Guangxi24 = 0,
-  # b_Tibet25 = 0,
-  # b_Ningxia26 = 0,
-  # b_Xinjiang27 = 0,
-  # b_Beijing28 = 0,
-  # b_Shanghai29 = 0,
-  # b_Tianjin30 = 0,
     b_price_gender_2l = 0,
   b_risk2_gender_2l = 0,
   b_risk3_gender_2l = 0,
@@ -912,16 +827,6 @@ apollo_beta <- c(
   b_oral_hasvaccined_2l = 0,
   b_dose3_hasvaccined_2l = 0,
   b_imported_hasvaccined_2l = 0,
-  #   b_price_depression_2l = 0,
-  # b_risk2_depression_2l = 0,
-  # b_risk3_depression_2l = 0,
-  # b_duration2_depression_2l = 0,
-  # b_duration3_depression_2l = 0,
-  # b_efficacy2_depression_2l = 0,
-  # b_efficacy3_depression_2l = 0,
-  # b_oral_depression_2l = 0,
-  # b_dose3_depression_2l = 0,
-  # b_imported_depression_2l = 0,
   b_price_sigma  = 0,
   b_risk2_sigma  = 0,
   b_risk3_sigma  = 0,
@@ -943,7 +848,7 @@ apollo_fixed <- c()
 # ################################################################# #
 
 ### Set parameters for generating draws
-apollo_draws <- list(
+makeDraws <- list(
   interDrawsType = "mlhs",
   interNDraws = 500,
   interUnifDraws = c(),
@@ -997,9 +902,6 @@ apollo_probabilities <- function(apollo_beta, apollo_inputs, functionality = "es
 
   ### Create list of probabilities P
   P <- list()
-
-  ### Effect codings constraint
-  # b_Chongqing31 = -b_Hebei1-b_Shanxi2-b_Liaoning3-b_Jilin4-b_Heilongjiang5-b_Jiangsu6-b_Zhejiang7-b_Anhui8-b_Fujian9-b_Jiangxi10-b_Shandong11-b_Henan12-b_Hubei13-b_Hunan14-b_Guangdong15-b_Hainan16-b_Sichuan17-b_Guizhou18-b_Yunnan19-b_Shaanxi20-b_Gansu21-b_Qinghai22-b_Neimongol23-b_Guangxi24-b_Tibet25-b_Ningxia26-b_Xinjiang27-b_Beijing28-b_Shanghai29-b_Tianjin30
   
   V <- list()
 
@@ -1009,29 +911,6 @@ apollo_probabilities <- function(apollo_beta, apollo_inputs, functionality = "es
     b_duration2 * duration2.1 + b_duration3 * duration3.1 + b_efficacy2 * efficacy2.1 +
     b_efficacy3 * efficacy3.1 + b_oral * admin.1 + b_dose2 * doses2.1 +
     b_dose3*doses3.1 + b_imported*origin.1 + # below are respondents characteristics
-    # b_gender_2l*gender_2l + b_age_high*age_high + b_age_mid*age_mid + 
-    # b_education_high*education_high + b_education_mid*education_mid + 
-    # b_marriage_2l*marriage_2l + b_residence_2l*residence_2l + 
-    # b_occupation_high*occupation_high + b_occupation_mid*occupation_mid + 
-    # b_insurance_2l*insurance_2l + b_income_high*income_high + 
-    # b_income_mid*income_mid + b_chronic_2l*chronic_2l + 
-    # b_hasvaccined_2l*hasvaccined_2l + b_depression_2l*depression_2l + # geographic
-    # b_Hebei1*(province_31l == 1) + b_Shanxi2*(province_31l == 2) +
-    # b_Liaoning3 *(province_31l == 3) + b_Jilin4*(province_31l == 4) +
-    # b_Heilongjiang5*(province_31l == 5) + b_Jiangsu6*(province_31l == 6) +
-    # b_Zhejiang7*(province_31l == 7) + b_Anhui8*(province_31l == 8) +
-    # b_Fujian9*(province_31l == 9) + b_Jiangxi10*(province_31l == 10) +
-    # b_Shandong11*(province_31l == 11) + b_Henan12*(province_31l == 12) +
-    # b_Hubei13*(province_31l == 13) + b_Hunan14*(province_31l == 14) +
-    # b_Guangdong15*(province_31l == 15) + b_Hainan16*(province_31l == 16) +
-    # b_Sichuan17*(province_31l == 17) + b_Guizhou18*(province_31l == 18) +
-    # b_Yunnan19*(province_31l == 19) + b_Shaanxi20*(province_31l == 20) +
-    # b_Gansu21*(province_31l == 21) + b_Qinghai22*(province_31l == 22) +
-    # b_Neimongol23*(province_31l == 23) + b_Guangxi24*(province_31l == 24) +
-    # b_Tibet25*(province_31l == 25) + b_Ningxia26*(province_31l == 26) +
-    # b_Xinjiang27*(province_31l == 27) + b_Beijing28*(province_31l == 28) +
-    # b_Shanghai29*(province_31l == 29) + b_Tianjin30*(province_31l == 30) +
-    # b_Chongqing31*(province_31l == 31) + # below are interaction terms
       b_price_gender_2l * price.1 * gender_2l +
     b_risk2_gender_2l * risk2.1 * gender_2l +
     b_risk3_gender_2l * risk3.1 * gender_2l +
@@ -1172,44 +1051,11 @@ apollo_probabilities <- function(apollo_beta, apollo_inputs, functionality = "es
     b_oral_hasvaccined_2l * admin.1 * hasvaccined_2l +
     b_dose3_hasvaccined_2l * doses3.1 * hasvaccined_2l +
     b_imported_hasvaccined_2l * origin.1 * hasvaccined_2l +
-    #   b_price_depression_2l * price.1 * depression_2l +
-    # b_risk2_depression_2l * risk2.1 * depression_2l +
-    # b_risk3_depression_2l * risk3.1 * depression_2l +
-    # b_duration2_depression_2l * duration2.1 * depression_2l +
-    # b_duration3_depression_2l * duration3.1 * depression_2l +
-    # b_efficacy2_depression_2l * efficacy2.1 * depression_2l +
-    # b_efficacy3_depression_2l * efficacy3.1 * depression_2l +
-    # b_oral_depression_2l * admin.1 * depression_2l +
-    # b_dose3_depression_2l * doses3.1 * depression_2l +
-    # b_imported_depression_2l * origin.1 * depression_2l
   
   V[["alt2"]] <- asc + b_price * price.2 + b_risk2 * risk2.2 + b_risk3 * risk3.2 +
     b_duration2 * duration2.2 + b_duration3 * duration3.2 + b_efficacy2 * efficacy2.2 +
     b_efficacy3 * efficacy3.2 + b_oral * admin.2 + b_dose2 * doses2.2 +
     b_dose3*doses3.2 + b_imported*origin.2 + # below are respondents characteristics
-    # b_gender_2l*gender_2l + b_age_high*age_high + b_age_mid*age_mid + 
-    # b_education_high*education_high + b_education_mid*education_mid + 
-    # b_marriage_2l*marriage_2l + b_residence_2l*residence_2l + 
-    # b_occupation_high*occupation_high + b_occupation_mid*occupation_mid + 
-    # b_insurance_2l*insurance_2l + b_income_high*income_high + 
-    # b_income_mid*income_mid + b_chronic_2l*chronic_2l + 
-    # b_hasvaccined_2l*hasvaccined_2l + b_depression_2l*depression_2l +# geographic terms
-    # b_Hebei1*(province_31l == 1) + b_Shanxi2*(province_31l == 2) +
-    # b_Liaoning3 *(province_31l == 3) + b_Jilin4*(province_31l == 4) +
-    # b_Heilongjiang5*(province_31l == 5) + b_Jiangsu6*(province_31l == 6) +
-    # b_Zhejiang7*(province_31l == 7) + b_Anhui8*(province_31l == 8) +
-    # b_Fujian9*(province_31l == 9) + b_Jiangxi10*(province_31l == 10) +
-    # b_Shandong11*(province_31l == 11) + b_Henan12*(province_31l == 12) +
-    # b_Hubei13*(province_31l == 13) + b_Hunan14*(province_31l == 14) +
-    # b_Guangdong15*(province_31l == 15) + b_Hainan16*(province_31l == 16) +
-    # b_Sichuan17*(province_31l == 17) + b_Guizhou18*(province_31l == 18) +
-    # b_Yunnan19*(province_31l == 19) + b_Shaanxi20*(province_31l == 20) +
-    # b_Gansu21*(province_31l == 21) + b_Qinghai22*(province_31l == 22) +
-    # b_Neimongol23*(province_31l == 23) + b_Guangxi24*(province_31l == 24) +
-    # b_Tibet25*(province_31l == 25) + b_Ningxia26*(province_31l == 26) +
-    # b_Xinjiang27*(province_31l == 27) + b_Beijing28*(province_31l == 28) +
-    # b_Shanghai29*(province_31l == 29) + b_Tianjin30*(province_31l == 30) +
-    # b_Chongqing31*(province_31l == 31) + # below are interaction terms
       b_price_gender_2l * price.2 * gender_2l +
     b_risk2_gender_2l * risk2.2 * gender_2l +
     b_risk3_gender_2l * risk3.2 * gender_2l +
