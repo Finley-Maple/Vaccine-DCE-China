@@ -7,16 +7,26 @@ output: html_document
 
 ```{r setup, include=FALSE}
 set.seed(123)
+# packages for data manipulation
 pacman::p_load("readxl", "fastR2", "weights", "survey", "gtsummary", "haven", "mice",
                "mlogit", "dplyr", "janitor", "rio", "tidyverse", "car", "apollo")
 
 # packages for the map
-pacman::p_load("maps", "fastR2", "mapdata", "maptools", "ggplot2", "mapproj", 
+pacman::p_load("maps", "mapdata", "maptools", "ggplot2", "mapproj", 
                "rgdal", "reshape2", "Hmisc", "jtools", "pscl", "aod", "gpclib")
+
+# packages for merging the plots
+pacman::p_load("cowplot", "magick")
 
 # Determine the fonts ----
 library(showtext)
-font_add("Times New Roman", "times.ttf")
+
+if (Sys.info()[['sysname']] == "Windows"){
+  font_add("Times New Roman", regular = "times.ttf", bold = "timesbd.ttf", italic = "timesi.ttf", bolditalic = "timesbi.ttf") # for Windows
+  }
+if (Sys.info()[['sysname']] == "Darwin"){
+  font_add("Times New Roman", "times.ttc") # for Mac
+}
 
 # Function used to analyze the apollo model output
 FormatResult_ML <- function(apollo_model){
@@ -1358,8 +1368,8 @@ for (i in 1:length(c_Attribute)){
 # set the characteristic in the total effect dataframe as factor and switch the Attribute "risk2" and "risk3"
 total_effect_dat <- total_effect_dat %>%
   mutate(
-    Characteristic=fct_relevel(
-      factor(Characteristic), 
+    Characteristic=factor(
+      Characteristic, 
       levels = c(
         "Has been vaccinated", "Chronic disease diagnosis", "High income",
         "Middle income", "UEBMI", "No job", "Work in a public setting", "Urban", "Married",
@@ -1376,8 +1386,14 @@ main_effect_dat = data.frame(Attribute = c_Attribute, Coef = result_dat$Estimate
 main_effect_dat$Coef[1] = main_effect_dat$Coef[1]*100
 ```
 
+#### 2.4.3 Figure 1: Visualization of the interaction effects
+
 ```{r Figure 1 Visualization of the interaction effects}
 showtext_auto()
+
+c_Attribute = c("b_price", "b_risk3", "b_risk2", "b_duration2", "b_duration3", "b_efficacy2", "b_efficacy3", "b_oral", "b_dose3", "b_imported")
+
+image_list <- list()
 
 # Visualization of the interaction effects by each attribute using ggplot2
 for (i in c_Attribute){
@@ -1386,7 +1402,7 @@ for (i in c_Attribute){
   # plot the interaction effects
   p = ggplot(temp_dat, aes(x = Characteristic, y = Coef, fill = Group)) +
     # add point to show the coefficient with color for each group
-    geom_point(position = position_dodge(0.5), size = 10) +
+    geom_point(position = position_dodge(0.5), size = 1) +
     # add error bar to show the confidence interval with color for each group
     geom_linerange(aes(ymin = lwb, ymax = upb), position = position_dodge(0.9)) +
     # set the range of y axis to be (-2, 2) and values (-2.00, -1.00, 0.00, 1.00, 2.00)
@@ -1408,7 +1424,7 @@ for (i in c_Attribute){
       panel.grid.minor = element_blank(),
       axis.ticks.y = element_blank(),      
       # text font using Times New Roman, and text font size is 100
-      text = element_text(family = "Times New Roman", size = 100),
+      text = element_text(family = "Times New Roman", size = 15),
       # the text colour is black
       axis.text = element_text(color = "black"),
       # no legend
@@ -1418,9 +1434,38 @@ for (i in c_Attribute){
     )
   # print(p)
   # save the plot as eps file
-  ggsave(paste0("Figure/ML_interaction_effects_", i, ".eps"), width = 40, height = 30, dpi = 300, units = "in", device = "eps")
-  #ggsave(paste0("Figure/ML_interaction_effects_", i, ".eps"), width = 40, height = 30, dpi = 300, units = "in", device = "eps")
+  # ggsave(paste0("Figure/ML_interaction_effects_", i, ".eps"), width = 40, height = 30, dpi = 300, units = "in", device = "eps")
+  image_list[[i]] <- p
 }
+
+# merge the plots into one figure
+# List of EPS files to merge
+# eps_files <- c("Figure/ML_interaction_effects_b_price.eps", "Figure/ML_interaction_effects_b_risk2.eps", "Figure/ML_interaction_effects_b_risk3.eps", "Figure/ML_interaction_effects_b_duration2.eps", "Figure/ML_interaction_effects_b_duration3.eps", "Figure/ML_interaction_effects_b_efficacy2.eps", "Figure/ML_interaction_effects_b_efficacy3.eps", "Figure/ML_interaction_effects_b_oral.eps", "Figure/ML_interaction_effects_b_dose3.eps", "Figure/ML_interaction_effects_b_imported.eps")
+
+labels <- c("A  Price", "B  Moderate risk", "C  High risk", "D  Moderate protection duration (12 months)", "E  Long protection duration (Life long)", "F  Moderate efficacy (70% efficacy)", "G  High efficacy (90% efficacy)", "H  Oral administration", "I  Three doses", "J  Imported")
+
+# # Function to convert magick image to ggplot object
+# image_to_ggplot <- function(image, label) {
+#   ggplot() +
+#     annotation_custom(rasterGrob(image, interpolate = TRUE), xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = Inf) +
+#     ggtitle(label) +
+#     theme_void() +
+#     theme(plot.title = element_text(hjust = 0.5, size = 15))
+# }
+# 
+# # Read EPS files as images and convert to ggplot objects
+# image_ggplots <- mapply(function(file, label) {
+#   image <- image_read(file)
+#   image_to_ggplot(image, label)
+# }, eps_files, labels, SIMPLIFY = FALSE)
+
+# Combine images into a single plot with labels
+combined_image <- plot_grid(plotlist = image_list, ncol = 2, labels = labels, label_fontfamily = "Times New Roman", label_size = 15, hjust = -1.5, vjust =  0)
+
+
+print(combined_image)
+# Save the labeled combined image to a file
+ggsave("Figure/combined_figure1_with_labels.pdf", plot = combined_image, device = "pdf", width = 16, height = 22, dpi = 300, limitsize = FALSE, units = "in")
 
 
 ```
@@ -1793,64 +1838,6 @@ linefig <- ggplot(data = dat_uptake_educationgp, aes(x = vaccine_price, y = upta
 print(linefig)
 ggsave(filename = "Figure/linefig_by_educationgp.eps", linefig, width = 16, height = 9, dpi = 300, units = "in", device='eps')
 
-```
-
-### 2.8 Figure 4: Uptake rate for different vaccine across provinces
-
-
-```{r draw maps}
-# rm(list = ls())
-# # determine the fonts
-# showtext_auto()
-# library(sf)
-# load("Result/Prediction_Kexing_price.RData")
-# socio_dat <- read.csv(file = "Data/socio_dat.csv")
-# socio_dat <- socio_dat %>%
-#   select(ID, province_31l)
-
-# vaccine_price = c(0, 100, 200, 400, 600)
-# list_predictions_price = list(predictions_Kexing_0, predictions_Kexing_100, predictions_Kexing_200, predictions_Kexing_400, predictions_Kexing_600)
-# list_predictions_price_socio <- lapply(list_predictions_price, function(x) left_join(x, socio_dat, by = "ID"))
-# list_uptake_province <- lapply(list_predictions_price_socio, function(x) aggregate(uptake_rate~province_31l, x, mean))
-
-
-# for (i in 1:length(list_predictions_price)) {
-#   map_data <- import("Data/Mapdata/Chinamap_data.xlsx")
-#   map_data$province_31l = c(1:nrow(map_data))
-#   map_data <- list_uptake_province[[i]] %>%
-#     right_join(map_data, by = "province_31l")
-  
-#   China <- st_read(dsn = "Data/Mapdata/china.json",stringsAsFactors = FALSE)
-
-#   # check whether the data contains the projecting information
-#   # st_crs(China) # NA means no such information; need to attach manually
-#   # China <- st_set_crs(China, 4326)
-#   China <- st_transform(China, "+init=epsg:4508")
-  
-  
-#   data_merge <- China %>%
-#     left_join(map_data, by = "adcode")
-  
-#   # determine the fonts
-#   windowsFonts(myFont = windowsFont("Times New Roman"))
-  
-#   map<-ggplot() + # 底图
-#     geom_sf(data = data_merge, aes(fill = uptake_rate*100)) + # 省域
-#     coord_sf() +  # 投影方式
-#     scale_fill_distiller(name = "Uptake(%)", palette = "RdYlGn", direction = 1, limits=c(50,100)) +
-#     theme(
-#       legend.text = element_text(family = "Times New Roman", size = 15),
-#       legend.title = element_text(family = "Times New Roman", size = 20),
-#       panel.grid.major =  element_blank(), 
-#       panel.grid.minor = element_blank(),
-#       panel.background = element_blank(),
-#       axis.line = element_blank(),
-#       axis.text = element_blank(),
-#       axis.ticks = element_blank())
-  
-#   print(map)
-#   ggsave(filename = paste0("Figure/Sinovac_", vaccine_price[i], "_Map.eps"), map, width = 10.5, height = 10, dpi = 300, units = "in", device='eps')
-# }
 ```
 
 ## 3. Subgroup analysis by province
@@ -2248,7 +2235,7 @@ for (i in 1:31) {
 }
 ```
 
-#### 3.1 Figure 3: Subgroup analysis- Sinovac vaccine with different price
+#### 3.1 Figure 4: Subgroup analysis- Sinovac vaccine with different price
 
 ```{r predict the take up rate for each province}
 library(gridExtra)
@@ -2366,175 +2353,8 @@ sapply(result, function(x) x["b_imported_mu",])
 #   filter(p_value == "<0.001" | as.numeric(p_value)<0.05)
 ```
 
-## 4. Appendix Table 1: Conditional logit model
 
-```{r appendix conditional logit model}
-# use apollo package to analyze
-# ####################################################### #
-#### 1. Definition of core settings                        
-# ####################################################### #
-### clear
-rm(list = ls())
-
-### Load library
-library(apollo)
-
-### Initialise code
-apollo_initialise()
-
-### Set core controls
-apollo_control <- list(
-  modelName = "MNL",
-  modelDescr = "Adults' preferences for a vaccine product",
-  indivID = "ID"
-  #,weights = "weight" # apply sample weights
-)
-# ####################################################### #
-#### 2. Data loading                                   ####
-# ####################################################### #
-database <- read.csv(file = "Data/database.csv")
-database <- subset(database, select = c("ID","price.1","risk2.1","risk3.1","duration2.1",
-                                     "duration3.1","efficacy2.1","efficacy3.1",
-                                     "admin.1","doses2.1","doses3.1","origin.1",
-                                     "price.2","risk2.2","risk3.2",
-                                     "duration2.2","duration3.2","efficacy2.2",
-                                     "efficacy3.2","admin.2","doses2.2",
-                                     "doses3.2","origin.2","choice","weight"))
-
-database <- as.data.frame(database)
-
-# ####################################################### #
-#### 3. Parameter definition                           ####
-# ####################################################### #
-
-### Vector of parameters, including any that are kept fixed 
-### during estimation
-
-apollo_beta <- c(
-  asc     = 0,
-  b_price  = 0,
-  b_risk2  = 0,
-  b_risk3  = 0,
-  b_duration2  = 0,
-  b_duration3 = 0,
-  b_efficacy2 = 0,
-  b_efficacy3 = 0,
-  b_oral = 0,
-  b_dose2 = 0,
-  b_dose3 = 0,
-  b_imported = 0
-)
-
-### Vector with names (in quotes) of parameters to be
-###  kept fixed at their starting value in apollo_beta.
-### Use apollo_beta_fixed = c() for no fixed parameters.
-
-apollo_fixed <- c() # no fixed parameters in our model
-
-# ####################################################### #
-#### 4. Input validation                               ####
-# ####################################################### #
-
-apollo_inputs = apollo_validateInputs()
-
-# ####################################################### #
-#### 5. Likelihood definition                          ####
-# ####################################################### #
-
-apollo_probabilities <- function(apollo_beta, apollo_inputs, functionality = "estimate"){
-  ### Attach inputs and detach after function exit
-  apollo_attach(apollo_beta, apollo_inputs)
-  on.exit(apollo_detach(apollo_beta, apollo_inputs))
-  
-  ### Create list of probabilities P
-  P <- list()
-  
-  V <- list()
-  
-  ### List of utilities: these must use the same names as
-  ### in mnl_settings, order is irrelevant.
-  V[['alt1']] = asc + b_price*price.1 + b_risk2*risk2.1 + b_risk3*risk3.1 + 
-    b_duration2*duration2.1 + b_duration3*duration3.1 + b_efficacy2*efficacy2.1 + 
-    b_efficacy3*efficacy3.1 + b_oral*admin.1 + b_dose2*doses2.1 + 
-    b_dose3*doses3.1 + b_imported*origin.1
-  V[['alt2']] = asc + b_price*price.2 + b_risk2*risk2.2 + b_risk3*risk3.2 + 
-    b_duration2*duration2.2 + b_duration3*duration3.2 + b_efficacy2*efficacy2.2 + 
-    b_efficacy3*efficacy3.2 + b_oral*admin.2 + b_dose2*doses2.2 + 
-    b_dose3*doses3.2 + b_imported*origin.2
-  V[['alt3']] = 0
-  
-  ### Define settings for MNL model component
-  mnl_settings <- list(
-    alternatives = c(alt1 = 1, alt2 = 2, alt3 = 3),
-    avail        = list(alt1 = 1, alt2 = 1, alt3 = 1),
-    choiceVar    = choice,
-    V            = V
-  )
-  
-  ### Compute probabilities using MNL model
-  P[['model']] = apollo_mnl(mnl_settings, functionality)
-  
-  ### Take product across observation for same individual
-  P = apollo_panelProd(P, apollo_inputs, functionality)
-  
-  ### Using sampling weights in estimation and prediction
-  #P = apollo_weighting(P, apollo_inputs, functionality)
-  
-  ### Prepare and return outputs of function
-  P = apollo_prepareProb(P, apollo_inputs, functionality)
-  
-  return(P)
-}
-
-# ####################################################### #
-#### 6. Model estimation                   ####
-# ####################################################### #
-fit <- apollo_estimate(apollo_beta, apollo_fixed, 
-                       apollo_probabilities, apollo_inputs)
-
-save(fit, file = "Model/CL.RData")
-```
-
-### 4.1 Report the CL model result
-
-```{r}
-load(file = "Model/CL.RData")
-
-# function: Format DCE model output for the nested/conditional logit model
-FormatResult <- function(apollo_model, df=143998){
-  beta_dat <- as.data.frame(apollo_modelOutput(apollo_model, list(printPVal = TRUE)))[,c(1,5,7)] %>%
-    rename(p_value = `p(1-sided)`) %>%
-    mutate(
-      `2.5%` = Estimate + qnorm(0.025)*Rob.s.e.,
-      `97.5%` = Estimate + qnorm(0.975)*Rob.s.e.
-    ) %>%
-    dplyr::select(Estimate, `2.5%`, `97.5%`, p_value)
-  var_name <- names(coef(apollo_model))
-  beta_dat$WTP <- NA_real_
-  beta_dat$WTP_p_value <- NA_real_
-  for (i in c(1:length(var_name))) {
-    if (var_name[i]!="b_price"){
-      temp<-apollo_deltaMethod(apollo_model, deltaMethod_settings = list(operation = "ratio", 
-                                                                parName1 = var_name[i], 
-                                                                parName2 = "b_price", 
-                                                                multPar1 = -1))
-      beta_dat[var_name[i], "WTP"] = temp[1]
-      # one sided p value
-      beta_dat[var_name[i],"WTP_p_value"] = ifelse(temp[3]>0,2*(1-pt(temp[3],df)),2*pt(temp[3],df))
-    }
-  }
-  beta_dat <- beta_dat %>% mutate_at(vars(ends_with("p_value")), function(v) ifelse(v<1e-3,"<0.001",v))
-  return(beta_dat)
-}
-# ####################################################### #
-#### 7. Report result                ####
-# ####################################################### #
-result_dat <- FormatResult(fit)
-
-write.csv(result_dat,file = "Result/CL.csv")
-```
-
-## 5. Appendix Table 2: Mixed logit model
+## Appendix Table 1: Mixed logit model
 
 ```{r Mixed logit model}
 # use apollo package to analyze
@@ -2730,7 +2550,7 @@ fit <- apollo_estimate(
 
 ```
 
-### 5.1 Report the basic model results (Appendix Table S1)
+###  Report the basic model results (Appendix Table S1)
 
 ```{r}
 # choose either one: ML_preference_space.RData / ML_corr_WTP_sapce.RData
@@ -2750,7 +2570,7 @@ write.csv(result_dat,file = "Result/ML_preferenced.csv")
 ```
 
 
-# 6. Appendix Table 2: Report the relative importance
+# Appendix Table 2: Report the relative importance
 
 ```{r}
 # rm(list = ls())
@@ -2796,7 +2616,7 @@ fit$LLout # -103661.5
 ```
 
 
-## 7. Appendix Table 3: Relative importance of the attributes
+## Appendix Table 3: Relative importance of the attributes
 
 
 ```{r Exclude price}
