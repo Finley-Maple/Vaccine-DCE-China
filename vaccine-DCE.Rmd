@@ -1438,34 +1438,17 @@ for (i in c_Attribute){
   image_list[[i]] <- p
 }
 
-# merge the plots into one figure
-# List of EPS files to merge
-# eps_files <- c("Figure/ML_interaction_effects_b_price.eps", "Figure/ML_interaction_effects_b_risk2.eps", "Figure/ML_interaction_effects_b_risk3.eps", "Figure/ML_interaction_effects_b_duration2.eps", "Figure/ML_interaction_effects_b_duration3.eps", "Figure/ML_interaction_effects_b_efficacy2.eps", "Figure/ML_interaction_effects_b_efficacy3.eps", "Figure/ML_interaction_effects_b_oral.eps", "Figure/ML_interaction_effects_b_dose3.eps", "Figure/ML_interaction_effects_b_imported.eps")
 
 labels <- c("A  Price", "B  Moderate risk", "C  High risk", "D  Moderate protection duration (12 months)", "E  Long protection duration (Life long)", "F  Moderate efficacy (70% efficacy)", "G  High efficacy (90% efficacy)", "H  Oral administration", "I  Three doses", "J  Imported")
 
-# # Function to convert magick image to ggplot object
-# image_to_ggplot <- function(image, label) {
-#   ggplot() +
-#     annotation_custom(rasterGrob(image, interpolate = TRUE), xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = Inf) +
-#     ggtitle(label) +
-#     theme_void() +
-#     theme(plot.title = element_text(hjust = 0.5, size = 15))
-# }
-# 
-# # Read EPS files as images and convert to ggplot objects
-# image_ggplots <- mapply(function(file, label) {
-#   image <- image_read(file)
-#   image_to_ggplot(image, label)
-# }, eps_files, labels, SIMPLIFY = FALSE)
+
 
 # Combine images into a single plot with labels
-combined_image <- plot_grid(plotlist = image_list, ncol = 2, labels = labels, label_fontfamily = "Times New Roman", label_size = 15, hjust = -1.5, vjust =  0)
-
+combined_image <- plot_grid(plotlist = image_list, ncol = 2, labels = labels, label_fontfamily = "Times New Roman", label_fontface = "bold", label_size = 15, label_x = 0.5, label_y = 1, hjust = 0.5, vjust =  c(1.5, 1.5, 0, 0, 0, 0, 0, 0, 0, 0))
 
 print(combined_image)
 # Save the labeled combined image to a file
-ggsave("Figure/combined_figure1_with_labels.pdf", plot = combined_image, device = "pdf", width = 16, height = 22, dpi = 300, limitsize = FALSE, units = "in")
+ggsave("Figure/combined_figure1_with_labels.eps", plot = combined_image, device = "eps", width = 16, height = 22, dpi = 400, limitsize = FALSE, units = "in")
 
 
 ```
@@ -2239,6 +2222,7 @@ for (i in 1:31) {
 
 ```{r predict the take up rate for each province}
 library(gridExtra)
+library(sf)
 
 rm(list = ls())
 load("Result/province_dat2.RData")
@@ -2276,11 +2260,11 @@ for (i in 1:length(vaccine_price)) {
     left_join(map_data, by = "adcode")
   
   # determine the fonts
-  windowsFonts(myFont = windowsFont("Times New Roman"))
+  # windowsFonts(myFont = windowsFont("Times New Roman"))
   
-  map<-ggplot() + # 底图
-    geom_sf(data = data_merge, aes(fill = uptake_rate*100)) + # 省域
-    coord_sf() +  # 投影方式
+  map<-ggplot() + # base map
+    geom_sf(data = data_merge, aes(fill = uptake_rate*100)) + # province 
+    coord_sf() +  # projection way
     scale_fill_distiller(name = "Uptake(%)", palette = "RdYlGn", direction = 1, limits=c(40,100)) +
     labs(caption = paste0("Price: ", vaccine_price[i], " RMB")) +
     theme(
@@ -2296,14 +2280,17 @@ for (i in 1:length(vaccine_price)) {
   
   print(map)
   
-  ggsave(filename = paste0("Figure/Sinovac_Subgroup_", vaccine_price[i], ".eps"), map, width = 10.5, height = 10, dpi = 300, units = "in", device='eps')
-  # map_list = append(list(map), map_list, after = 0)
+  # ggsave(filename = paste0("Figure/Sinovac_Subgroup_", vaccine_price[i], ".eps"), map, width = 10.5, height = 10, dpi = 300, units = "in", device='eps')
+  map_list = append(map_list, list(map))
 }
 
-# # arrange the plots in a 2x2 grid
-# grid <- marrangeGrob(map_list, nrow = 2, ncol = 2)
-# 
-# ggsave(filename = paste0("Figure/Sinovac_Subgroup.pdf"), grid, width = 15, height = 10, dpi = 300, units = "in", device='pdf')
+
+# Combine images into a single plot with labels
+combined_image <- plot_grid(plotlist = map_list, ncol = 2)
+
+print(combined_image)
+# Save the labeled combined image to a file
+ggsave("Figure/combined_figure4.eps", plot = combined_image, device = "eps", width = 16, height = 20, dpi = 400, limitsize = FALSE, units = "in")
 
 ```
 
